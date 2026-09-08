@@ -4,7 +4,7 @@ import time
 
 from .conductor.db import classify
 from .lifecycle import Turn
-from .protocol import chunks
+from .presentation import live, pages, render
 
 log = logging.getLogger(__name__)
 
@@ -16,12 +16,17 @@ class Poller:
         self.last_text = {}
         self.clock, self.settle_seconds = clock, settle_seconds
 
-    def finish(self, status, text):
-        self.store.update(status["id"], state="delivering", result=text)
+    def finish(self, status, text, phase="done", detail=""):
+        turn = Turn.load(status["tracking"])
+        turn.phase, turn.detail = phase, detail
+        self.store.update(status["id"], state="delivering", result=text, tracking=turn.dump())
         self.deliver(self.store.status(status["id"]))
 
     def deliver(self, status):
-        parts = chunks(status["result"])
+        turn = Turn.load(status["tracking"])
+        # Existing delivering rows from older runtimes have no presentation state.
+        phase = turn.phase if turn.phase in {"done", "failed", "attention", "archived"} else "done"
+        parts = pages(phase, status["result"], turn.detail, status["note"])
         for index in range(status["delivered"], len(parts)):
             if index == 0:
                 self.slack.edit(status, parts[index])
@@ -51,6 +56,7 @@ class Poller:
                 self.finish(
                     status,
                     "bridge restarted before send was confirmed; check Conductor before retrying",
+                    "attention",
                 )
             else:
                 self.store.update(status["id"], state="failed")
@@ -60,6 +66,10 @@ class Poller:
         for status in self.store.active():
             if status["state"] == "active" and status["tracking"] == "{}":
                 self.store.update(status["id"], cursor=0)
+            if status["status_ts"] and status["state"] != "delivering":
+                self.slack.edit(
+                    status, render("reconnecting", Turn.load(status["tracking"]).content)
+                )
         self.tick()
 
     def tick(self):
@@ -73,18 +83,16 @@ class Poller:
                             "AND state='active' AND id<?",
                             (status["session_id"], pickup["turn_id"], status["id"]),
                         ):
-                            self.slack.delete(old)
-                            self.store.update(old["id"], state="superseded")
+                            self.store.handoff(status["id"], old["id"])
                             self.idle_since.pop(old["id"], None)
                             self.last_text.pop(old["id"], None)
-                            # Reconstruct the whole shared turn on steering so
-                            # outstanding jobs and prior content aren't lost.
-                            status["cursor"] = 0
+                            status = self.store.status(status["id"])
                         self.store.update(
                             status["id"],
                             state="active",
                             turn_id=pickup["turn_id"],
                             cursor=min(status["cursor"], pickup["seq"] - 1),
+                            note="" if status["note"].startswith("error:") else status["note"],
                         )
             except Exception:
                 log.exception("Pickup failed for status %s", status["id"])
@@ -95,12 +103,16 @@ class Poller:
                 log.exception("Polling failed for status %s", status["id"])
 
     def poll(self, status):
+        for ts in json.loads(status["discard_ts"]):
+            self.slack.delete(dict(status, status_ts=ts))
+        if status["discard_ts"] != "[]":
+            self.store.update(status["id"], discard_ts="[]")
         if status["state"] == "delivering":
             self.deliver(status)
             return
         workspace = self.db.workspace(status["workspace_id"])
         if workspace["state"] == "archived":
-            self.finish(status, "workspace archived in Conductor")
+            self.finish(status, Turn.load(status["tracking"]).content, "archived")
             self.store.thread_state(status, "archived")
             return
         session = self.db.session(status["session_id"])
@@ -119,7 +131,7 @@ class Poller:
                             self.slack.post(
                                 status["channel"],
                                 status["thread_ts"],
-                                text,
+                                render("working", text, "tool activity"),
                                 f"tool:{status['event_key']}:{row['id']}:{text}",
                             )
                 status["cursor"] = row["seq"]
@@ -142,8 +154,24 @@ class Poller:
             self.store.update(
                 status["id"], cursor=status["cursor"], latest=status["latest"], tracking=turn.dump()
             )
+            status["tracking"] = turn.dump()
             if ready:
-                self.finish(status, ("error: " if turn.is_error else "") + turn.content)
+                self.finish(status, turn.content, "failed" if turn.is_error else "done")
+                return
+            if (
+                not turn.result_seq
+                and not turn.tasks
+                and not turn.awaiting_callback
+                and turn.phase != "attention"
+                and now - self.idle_since.get(status["id"], now) > 30
+            ):
+                self.finish(
+                    status,
+                    turn.content
+                    + "\n\nThe agent stopped without a final response. Check Conductor before retrying.",
+                    "attention",
+                    "agent stopped",
+                )
                 return
         if status["state"] == "waiting" and now - self.idle_since.get(status["id"], now) > 30:
             queued = self.db.query(
@@ -153,10 +181,21 @@ class Poller:
             )
             if not queued:
                 self.finish(
-                    status, "agent is idle without a matching reply; check the Conductor session"
+                    status,
+                    "Agent is idle without a matching reply; check the Conductor session.",
+                    "attention",
                 )
                 return
-        text = status["latest"] + (f" ({status['note']})" if status["note"] else "")
+        if status["state"] == "active":
+            text = live(turn, status["note"])
+        elif status["note"].startswith("error:"):
+            text = render("unconfirmed", status["note"], "send unconfirmed")
+        else:
+            text = render(
+                "queued" if status["latest"] == "queued" else "starting",
+                detail="waiting for current turn" if status["latest"] == "queued" else "",
+                note=status["note"],
+            )
         if now - status["last_edit"] >= 1.5 and self.last_text.get(status["id"]) != text:
             self.slack.edit(status, text[:3900])
             self.last_text[status["id"]] = text

@@ -32,6 +32,10 @@ class Store:
             columns = {row[1] for row in conn.execute("PRAGMA table_info(statuses)")}
             if "tracking" not in columns:
                 conn.execute("ALTER TABLE statuses ADD COLUMN tracking TEXT NOT NULL DEFAULT '{}'")
+            if "discard_ts" not in columns:
+                conn.execute(
+                    "ALTER TABLE statuses ADD COLUMN discard_ts TEXT NOT NULL DEFAULT '[]'"
+                )
         path.chmod(0o600)
 
     @contextmanager
@@ -113,6 +117,7 @@ class Store:
             "result",
             "delivered",
             "tracking",
+            "discard_ts",
         }
         if not values.keys() <= allowed:
             raise ValueError("Unknown status field")
@@ -123,6 +128,32 @@ class Store:
 
     def status(self, status_id):
         return self.rows("SELECT * FROM statuses WHERE id=?", (status_id,))[0]
+
+    def handoff(self, new_id, old_id):
+        """Transfer the original Slack message and replay state atomically."""
+        with self.connect() as conn:
+            new = conn.execute("SELECT * FROM statuses WHERE id=?", (new_id,)).fetchone()
+            old = conn.execute("SELECT * FROM statuses WHERE id=?", (old_id,)).fetchone()
+            tracking = json.loads(old["tracking"])
+            tracking.update(
+                result_seq=0, settled_at=None, phase="working", detail="applying follow-up"
+            )
+            discard = json.loads(old["discard_ts"]) + json.loads(new["discard_ts"])
+            if new["status_ts"] and new["status_ts"] != old["status_ts"]:
+                discard.append(new["status_ts"])
+            conn.execute(
+                "UPDATE statuses SET state='superseded',discard_ts='[]' WHERE id=?", (old_id,)
+            )
+            conn.execute(
+                "UPDATE statuses SET status_ts=?,cursor=?,tracking=?,discard_ts=? WHERE id=?",
+                (
+                    old["status_ts"],
+                    old["cursor"] if old["tracking"] != "{}" else 0,
+                    json.dumps(tracking),
+                    json.dumps(discard),
+                    new_id,
+                ),
+            )
 
     def active(self):
         return self.rows(

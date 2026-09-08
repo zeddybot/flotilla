@@ -9,6 +9,6 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --frozen
-      - run: uv run pytest tests/test_db.py tests/test_bridge.py tests/test_service.py tests/test_lifecycle.py -q
+      - run: uv run pytest tests/test_db.py tests/test_bridge.py tests/test_service.py tests/test_lifecycle.py tests/test_presentation.py -q
       - run: uv run ruff check src tests scripts
       - run: uv run ruff format --check src tests scripts

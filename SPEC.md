@@ -10,7 +10,7 @@ In:
 - Slack → Conductor: user messages only (new workspace, follow-up, queued follow-up, archive).
 - Conductor → Slack: agent output only. Turns you type in the Conductor UI are not relayed.
 - Per-thread model, effort, fast mode, send mode via bracket tokens.
-- One edited status message per turn.
+- One edited message per run: emoji/status, optional detail, and latest agent content. Steering retains the original message; queued requests get separate messages.
 
 Out:
 - Cloud workspaces (Conductor's public API is cloud-only; irrelevant here).
@@ -151,15 +151,16 @@ Row types the poller acts on (`json_valid(content)` guard first):
 | `system/task_started` | `description` field verbatim (Bash calls get this) |
 | `assistant/…/tool_use` | `<name>: <first string arg, 60 chars>` |
 | `assistant/…/text` | ignored until result |
-| `result` | final; post `result` text; `is_error` → prefix `error:` |
-| `session_state_changed`, `task_notification`, `background_tasks_changed`, `task_updated`, `user/tool_result` | ignored |
+| `result` | Candidate completion; retain as interim content while background jobs or resumed work remain. Final headers are Done or Failed. |
+| `system/task_notification` | Track terminal background-task state and wait for the agent's callback result. |
+| `session_state_changed`, `background_tasks_changed`, `task_updated`, `user/tool_result` | Not used as completion signals. |
 
 Workspace lifecycle: `workspaces.state` `ready` → `archived` (worktree removed within ~2 s, `archive_commit` set).
 
 ## Flows
 
 ### New request (top-level mention, or `[new]`)
-1. Reply in thread: `creating workspace`. Record `status_ts`.
+1. Reply in thread: `🏗️ Creating workspace`. Record `status_ts`.
 2. `open "conductor://prompt=<urlenc text>&path=<repo>"`. Poll `workspaces` (≤10 s) for the new row; store `workspace_id`, `session_id`.
 3. Ensure window; AXPress the sidebar link for `workspace_id`.
 4. Model: if the picker title ≠ target, open and AXPress the item. Effort: cycle to target, at most 8 presses. Fast: toggle if requested. Read all three back from `sessions`; on mismatch append `(model: <actual>, effort: <actual>)` to the status message and continue.
@@ -173,16 +174,17 @@ Ensure window, navigate, set editor, Send. Status message as above.
 1. Reply: `enqueuing message`.
 2. Navigate, set editor. If effective mode is `queue` and the user default is `steering` (or vice versa), Cmd+Enter; else Send.
 3. Queue mode: confirm the text under "Queued" in the tree → status `queued`. Pickup = a new `user` row with this text and a fresh `turn_id`. Steer mode: pickup = the `user` row appears immediately (same `turn_id`); status `steering`.
-4. On pickup: delete the previous turn's status message, this one becomes live.
+4. On steering pickup: transfer the original Slack message and lifecycle atomically, then remove the new temporary acknowledgment. Queueing retains separate messages.
 5. Multiple queued follow-ups: one status message each, matched to their `user` row by text and order.
 
 ### Poller (per active turn)
 - Tick every 1 s. Coalesce status edits to ≤1 per 1.5 s.
-- On `result`: replace the status message text with the result; if > 3900 chars, status gets the first chunk and the rest follow as replies. Turn ends when `sessions.status` reads `idle` and no queued item remains.
-- If the thread's workspace hits `archived` mid-turn, post `workspace archived in Conductor` and stop.
+- On `result`: preserve content and keep watching if jobs remain. Track terminal task notifications through the agent's resumed result under the same turn ID. Complete after a result with no outstanding jobs, no pending callback, and two seconds at rest. A later queued/user-started turn may occupy the session after this turn finishes.
+- Render every message as emoji/status, optional detail, and content. Header changes preserve the latest agent response. Long final answers use bounded continuation replies with headers.
+- If the thread's workspace hits `archived` mid-turn, update the existing message to `📦 Archived`, preserve its latest content, and stop.
 
 ### `[close]`
-Ensure window, sidebar link → context menu → Archive → confirm (`Archive workspace`, or `Stop agents and archive` if working). Wait for `state = archived`. Reply with `archived <archive_commit[:10]>`. Mark the thread `archived`; further mentions in that thread get "workspace archived; use [new]".
+Post `📦 Archiving`. Ensure window, sidebar link → context menu → Archive → confirm (`Archive workspace`, or `Stop agents and archive` if working). Wait for `state = archived`. Update that message to `📦 Archived`. Mark the thread `archived`; further mentions in that thread get "workspace archived; use [new]" with a Needs attention header.
 
 ### Startup
 Reconcile every `running` thread against `sessions.status`; finish or fail their status messages. Verify the AX selectors against a live window once and refuse to start if any is missing.
@@ -217,7 +219,7 @@ Everything else is read from `conductor.db` at the moment of use.
 | Selector missing | Post the selector name, attach tree snapshot to the log, abort the action. |
 | Deep link produced no row in 10 s | Post `workspace creation failed`, no retry (a second link would make a second workspace). |
 | Model/effort mismatch | Best effort: note the actual values in the status message and continue. Never block a turn on it. |
-| `result.is_error` | Post as error, keep the last status line. |
+| `result.is_error` | Finish with a Failed header and the agent's error response once the turn has settled. |
 | Bridge restart mid-turn | Startup reconciliation above. |
 | Slack rate limit (429) | Honor `Retry-After`; status edits are already coalesced. |
 

@@ -6,6 +6,7 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from .poller import Poller
+from .presentation import render
 from .protocol import parse, prompt_header
 from .slack_io import SlackIO
 
@@ -63,9 +64,14 @@ class Bridge:
             if command == "close":
                 if not thread:
                     raise ValueError("This thread has no workspace")
-                commit = self.conductor.archive(thread["workspace_id"], thread["session_id"])
+                status_id = self.store.add_status(key, channel, thread_ts, "", options)
+                status_ts = self.slack.post(
+                    channel, thread_ts, render("archiving"), f"status:{key}"
+                )
+                self.store.update(status_id, status_ts=status_ts)
+                self.conductor.archive(thread["workspace_id"], thread["session_id"])
                 self.store.thread_state(thread, "archived")
-                self.slack.post(channel, thread_ts, f"archived {commit}".strip(), f"close:{key}")
+                self.poller.finish(self.store.status(status_id), "", "archived")
             else:
                 if not text:
                     raise ValueError("Include a prompt after the mention or bracket tokens")
@@ -77,7 +83,10 @@ class Bridge:
                 status_ts = self.slack.post(
                     channel,
                     thread_ts,
-                    "creating workspace" if not thread or command == "new" else "enqueuing message",
+                    render(
+                        "creating" if not thread or command == "new" else "starting",
+                        detail=options["model"],
+                    ),
                     f"status:{key}",
                 )
                 self.store.update(status_id, status_ts=status_ts)
@@ -113,13 +122,13 @@ class Bridge:
                     self.store.update(
                         status_id, note=message, latest="send unconfirmed; checking Conductor"
                     )
-                    self.slack.edit(status, message[:3900])
+                    self.slack.edit(status, render("unconfirmed", message, "send unconfirmed"))
                 elif status["status_ts"]:
-                    self.poller.finish(status, message)
+                    self.poller.finish(status, message, "attention")
                 else:
                     self.store.update(status_id, state="failed")
             else:
-                self.slack.post(channel, thread_ts, message[:3900], f"error:{key}")
+                self.slack.post(channel, thread_ts, render("attention", message), f"error:{key}")
             self.store.execute("UPDATE events SET state='failed' WHERE key=?", (key,))
 
 
