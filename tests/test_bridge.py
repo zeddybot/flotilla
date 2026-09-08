@@ -33,7 +33,7 @@ def fixture(tmp_path):
       CREATE TABLE workspaces(id,state);
       INSERT INTO workspaces VALUES ('w','ready');
       CREATE TABLE sessions(id,status);
-      INSERT INTO sessions VALUES ('s','working');
+      INSERT INTO sessions VALUES ('s','idle');
       CREATE TABLE session_messages(id,session_id,role,content,turn_id,sent_at,cancelled_at,created_at);
     """)
     conn.commit()
@@ -209,7 +209,7 @@ def test_restart_picks_up_queued_row_updated_below_cursor_and_ignores_ui_turn(tm
     )
     conn.commit()
     result(conn, "slack-output", "slack-turn")
-    restarted = Poller(Store(store.path), db, slack)
+    restarted = Poller(Store(store.path), db, slack, settle_seconds=0)
     restarted.reconcile()
     assert store.status(sid)["state"] == "complete"
     assert slack.edits == [("status-1", "slack-output")]
@@ -224,7 +224,7 @@ def test_steering_handoff_only_posts_one_result(tmp_path):
     message(conn, "user", "first", "turn")
     message(conn, "user", "second", "turn")
     result(conn, "done", "turn")
-    Poller(store, db, slack).tick()
+    Poller(store, db, slack, settle_seconds=0).tick()
     assert store.status(first)["state"] == "superseded"
     assert store.status(second)["state"] == "complete"
     assert slack.deletes == ["status-1"]
@@ -240,7 +240,7 @@ def test_separate_queued_turns_both_deliver(tmp_path):
     result(conn, "first-result", "t1")
     message(conn, "user", "second", "t2")
     result(conn, "second-result", "t2")
-    Poller(store, db, slack).tick()
+    Poller(store, db, slack, settle_seconds=0).tick()
     assert slack.edits == [("status-1", "first-result"), ("status-2", "second-result")]
     assert not slack.deletes
     conn.close()

@@ -29,6 +29,9 @@ class Store:
         self.path = path
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(statuses)")}
+            if "tracking" not in columns:
+                conn.execute("ALTER TABLE statuses ADD COLUMN tracking TEXT NOT NULL DEFAULT '{}'")
         path.chmod(0o600)
 
     @contextmanager
@@ -109,6 +112,7 @@ class Store:
             "last_edit",
             "result",
             "delivered",
+            "tracking",
         }
         if not values.keys() <= allowed:
             raise ValueError("Unknown status field")
