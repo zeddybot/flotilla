@@ -18,6 +18,11 @@ class Bridge:
         self.bot_id, self.owner_id, self.team_id = bot_id, owner_id, team_id
         self.poller = Poller(store, conductor.db, slack)
 
+    def addressed(self, event):
+        return (
+            event.get("type") == "message" and event.get("channel_type") == "im"
+        ) or f"<@{self.bot_id}>" in event.get("text", "")
+
     def receive(self, body):
         event = body.get("event", {})
         if (
@@ -33,14 +38,7 @@ class Bridge:
         channel, ts = event.get("channel"), event.get("ts")
         if not channel or not ts:
             return
-        mention = f"<@{self.bot_id}>" in event["text"]
-        thread = self.store.thread(channel, event.get("thread_ts", ts))
-        if (
-            event["type"] == "message"
-            and event.get("channel_type") != "im"
-            and not mention
-            and not thread
-        ):
+        if not self.addressed(event):
             return
         # app_mention + message.channels deliver the same message twice with
         # different event IDs. The channel/message identity is the dedupe key.
@@ -49,6 +47,10 @@ class Bridge:
     def process(self, envelope):
         key = envelope["key"]
         event = json.loads(envelope["payload"])
+        # Apply the same rule to events persisted before an upgrade/restart.
+        if not self.addressed(event):
+            self.store.execute("UPDATE events SET state='ignored' WHERE key=?", (key,))
+            return
         channel, thread_ts = event["channel"], event.get("thread_ts", event["ts"])
         self.store.execute("UPDATE events SET state='processing' WHERE key=?", (key,))
         status_id = None
