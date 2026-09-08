@@ -1,0 +1,17 @@
+repo = "/Users/sameer/Documents/work/prodex/ttd"
+workspace_root = "~/conductor/workspaces/ttd"
+conductor_db = "~/Library/Application Support/com.conductor.app/conductor.db"
+state_dir = "~/Library/Application Support/slack-conductor"
+model = "Fable 5.1"
+effort = "high"
+send_mode = "steer"
+
+[models]
+opus = "Opus 5"
+sonnet = "Sonnet 5 1M"
+haiku = "Haiku 4.5"
+fable = "Fable 5.1"
+astra = "GPT-6 Astra"
+sol = "5.6 Sol"
+terra = "5.6 Terra"
+luna = "5.6 Luna"
