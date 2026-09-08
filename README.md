@@ -69,6 +69,20 @@ The bridge serializes UI actions across all threads, refuses to overwrite unsent
 
 ## Recovery and diagnostics
 
+Every message has an emoji/status header, optional detail, and optional agent content:
+
+```text
+⏳ Waiting · preview deployment · 1 background job
+
+The preview is building. I'll verify the fix after it deploys.
+```
+
+The header follows Creating workspace, Starting, Thinking, Working, Waiting, Queued, Done, Needs attention, Failed, Reconnecting, Archiving, or Archived. Header changes preserve the latest agent update. Verbose tool messages and long-answer continuations use the same format.
+
+A result with outstanding background jobs is an interim update. The bridge tracks job completion/failure/cancellation and the agent's resumed response, including across restarts. Done requires a result, no outstanding tracked jobs or pending callback, and two seconds at rest. Job failure alone does not mean the agent has failed. A subsequent queued turn may run while the previous turn's final answer is delivered.
+
+Steering preserves the original run's Slack message, content, and background-job tracking. Its temporary acknowledgment is removed after pickup is confirmed. Queued follow-ups get separate messages. Needs attention reports actionable bridge failures and explicit agent question events; blocked states are not inferred from ordinary prose. Long-lived tracked jobs remain outstanding until they finish or are cancelled.
+
 The private state directory contains `bridge.sqlite`, `daemon.lock`, rotating `daemon.log`, launchd startup logs, and the latest selector-failure snapshot. The snapshot omits AX values; treat all local logs and state as private because prompts, tool descriptions, and results can contain sensitive information.
 
 Incoming Slack messages are durably deduplicated by workspace/channel/message timestamp, including overlapping mention and message events. Restart recovery resumes queued/running turns and partially delivered results. It never blindly replays an interrupted UI send. If delivery is ambiguous, check Conductor before retrying. Slack and local SQLite cannot commit atomically: deterministic Slack message IDs reduce duplicate posts, but this is not an exactly-once transport.

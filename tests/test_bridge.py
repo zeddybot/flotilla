@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from slack_conductor.conductor.db import ConductorDB
 from slack_conductor.config import Config
 from slack_conductor.poller import Poller
+from slack_conductor.presentation import render
 from slack_conductor.protocol import chunks, parse
 from slack_conductor.slack_app import Bridge
 from slack_conductor.store import Store
@@ -212,9 +213,10 @@ def test_restart_picks_up_queued_row_updated_below_cursor_and_ignores_ui_turn(tm
     restarted = Poller(Store(store.path), db, slack, settle_seconds=0)
     restarted.reconcile()
     assert store.status(sid)["state"] == "complete"
-    assert slack.edits == [("status-1", "slack-output")]
+    assert slack.edits[-1] == ("status-1", render("done", "slack-output"))
+    count = len(slack.edits)
     restarted.tick()
-    assert len(slack.edits) == 1
+    assert len(slack.edits) == count
     conn.close()
 
 
@@ -227,8 +229,9 @@ def test_steering_handoff_only_posts_one_result(tmp_path):
     Poller(store, db, slack, settle_seconds=0).tick()
     assert store.status(first)["state"] == "superseded"
     assert store.status(second)["state"] == "complete"
-    assert slack.deletes == ["status-1"]
-    assert slack.edits == [("status-2", "done")]
+    assert slack.deletes == ["status-2"]
+    assert store.status(second)["status_ts"] == "status-1"
+    assert slack.edits == [("status-1", render("done", "done"))]
     conn.close()
 
 
@@ -241,7 +244,10 @@ def test_separate_queued_turns_both_deliver(tmp_path):
     message(conn, "user", "second", "t2")
     result(conn, "second-result", "t2")
     Poller(store, db, slack, settle_seconds=0).tick()
-    assert slack.edits == [("status-1", "first-result"), ("status-2", "second-result")]
+    assert slack.edits == [
+        ("status-1", render("done", "first-result")),
+        ("status-2", render("done", "second-result")),
+    ]
     assert not slack.deletes
     conn.close()
 
