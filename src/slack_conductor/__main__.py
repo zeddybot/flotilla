@@ -13,6 +13,7 @@ def main():
     parser.add_argument("--root", type=Path, default=Path.cwd())
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor")
+    sub.add_parser("daemon")
     new = sub.add_parser("new")
     new.add_argument("repo", type=Path)
     new.add_argument("prompt")
@@ -35,7 +36,11 @@ def main():
         "fast": False,
         "send_mode": getattr(args, "send_mode", None) or config.send_mode,
     }
-    if args.command == "doctor":
+    if args.command == "daemon":
+        from .service import daemon
+
+        daemon(args.root, config, conductor)
+    elif args.command == "doctor":
         conductor.ax.check()
         conductor.db.workspace_ids()
         print("Conductor database readable; Accessibility selectors available")

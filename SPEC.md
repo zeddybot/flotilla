@@ -47,7 +47,7 @@ Stack: Python 3.12 via `uv`; `slack-bolt` (Socket Mode); `pyobjc-framework-Appli
 
 - Socket Mode. App-level token with `connections:write`. No public URL.
 - Bot scopes: `app_mentions:read`, `chat:write`, `channels:history`, `groups:history`, `im:history`, `users:read`.
-- Events: `app_mention`, `message.im`.
+- Events: `app_mention`, `message.im`, `message.channels`, `message.groups`. Channel message subscriptions are required for unmentioned replies in mapped threads.
 - Every event is dropped unless `event.user == OWNER_SLACK_USER_ID` and the sender is not a bot. Channel text is untrusted input to the agent.
 - Replies via `chat.postMessage` with `thread_ts`; status edits via `chat.update`; superseded status via `chat.delete`; permalink via `chat.getPermalink`. Slack's streaming API is not used (thread replies unsupported in ordinary channels).
 - Message text > 3900 chars is split into consecutive thread replies. Code fences are not split mid-block.
@@ -224,7 +224,7 @@ Everything else is read from `conductor.db` at the moment of use.
 ## Security
 
 - Owner-only: exact Slack user id match, bots ignored. Anyone else mentioning the bot gets silence.
-- Tokens in `~/.config/slack-conductor/.env`, mode 600; never in the repo.
+- Tokens in the repository's gitignored `.env`, mode 600, per the owner's setup request. The launchd installer keeps a private mode-600 runtime copy so archiving the development worktree does not break the service. Tokens never enter version control or the launchd plist.
 - Prompt header is fixed text; user text is appended verbatim. No channel history is copied into the prompt; the agent fetches it with its own Slack tools if needed.
 - `conductor.db` opened read-only. The bridge never writes Conductor state.
 - Accessibility permission is granted to the launchd-run interpreter once.
