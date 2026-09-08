@@ -130,7 +130,7 @@ class Store:
         return self.rows("SELECT * FROM statuses WHERE id=?", (status_id,))[0]
 
     def handoff(self, new_id, old_id):
-        """Transfer the original Slack message and replay state atomically."""
+        """Move replay state to the acknowledgment below the steering message."""
         with self.connect() as conn:
             new = conn.execute("SELECT * FROM statuses WHERE id=?", (new_id,)).fetchone()
             old = conn.execute("SELECT * FROM statuses WHERE id=?", (old_id,)).fetchone()
@@ -139,18 +139,19 @@ class Store:
                 result_seq=0, settled_at=None, phase="working", detail="applying follow-up"
             )
             discard = json.loads(old["discard_ts"]) + json.loads(new["discard_ts"])
-            if new["status_ts"] and new["status_ts"] != old["status_ts"]:
-                discard.append(new["status_ts"])
+            if not new["status_ts"]:
+                raise ValueError("Steering requires a replacement Slack message")
+            if old["status_ts"] and new["status_ts"] != old["status_ts"]:
+                discard.append(old["status_ts"])
             conn.execute(
                 "UPDATE statuses SET state='superseded',discard_ts='[]' WHERE id=?", (old_id,)
             )
             conn.execute(
-                "UPDATE statuses SET status_ts=?,cursor=?,tracking=?,discard_ts=? WHERE id=?",
+                "UPDATE statuses SET cursor=?,tracking=?,discard_ts=?,last_edit=0 WHERE id=?",
                 (
-                    old["status_ts"],
                     old["cursor"] if old["tracking"] != "{}" else 0,
                     json.dumps(tracking),
-                    json.dumps(discard),
+                    json.dumps(list(dict.fromkeys(discard))),
                     new_id,
                 ),
             )

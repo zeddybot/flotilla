@@ -229,9 +229,10 @@ def test_steering_handoff_only_posts_one_result(tmp_path):
     Poller(store, db, slack, settle_seconds=0).tick()
     assert store.status(first)["state"] == "superseded"
     assert store.status(second)["state"] == "complete"
-    assert slack.deletes == ["status-2"]
-    assert store.status(second)["status_ts"] == "status-1"
-    assert slack.edits == [("status-1", render("done", "done"))]
+    assert slack.deletes == ["status-1"]
+    assert store.status(second)["status_ts"] == "status-2"
+    assert all(ts == "status-2" for ts, _ in slack.edits)
+    assert slack.edits[-1] == ("status-2", render("done", "done"))
     conn.close()
 
 
