@@ -58,15 +58,15 @@ Leading bracket tokens on the mention text, any order, case-insensitive. Sticky 
 
 | Token | Effect |
 |---|---|
-| `[fable]` `[opus]` `[sonnet]` `[haiku]` `[codex]` … | Model, resolved through `config.models` to a Conductor picker label (e.g. `Fable 5.1`, `Opus 5`). |
+| `[fable]` `[opus]` `[sonnet]` `[haiku]` `[astra]` `[sol]` `[terra]` `[luna]` | Model, resolved through `config.models` to a Conductor picker label (e.g. `Fable 5.1`, `GPT-6 Astra`). |
 | `[low]` `[medium]` `[high]` `[xhigh]` `[max]` `[ultracode]` | Effort, verified against `sessions.claude_effort_level`. |
 | `[fast]` | Toggle fast mode on. |
-| `[queue]` / `[steer]` | Send mode for this message when the agent is busy. Default `queue`. |
+| `[queue]` / `[steer]` | Sticky send mode when the agent is busy. Default `steer`. |
 | `[new]` | In a thread that already maps to a session: create a new workspace instead of following up. |
 | `[close]` | Archive the thread's workspace. |
 | `[verbose]` | Also post one line per tool call instead of only editing the status. |
 
-Defaults live in `config.toml`: `model = "Opus 5"`, `effort = "high"`. The repo is fixed: every workspace is created in `/Users/sameer/Documents/work/prodex/ttd`; there is no per-message repo selection.
+Defaults live in `config.toml`: `model = "Fable 5.1"`, `effort = "high"`. The repo is fixed: every workspace is created in `/Users/sameer/Documents/work/prodex/ttd`; there is no per-message repo selection.
 
 Model and effort are **best effort**: the bridge tries to set them, verifies from `sessions`, and if Conductor ends up elsewhere it says so in the status message and proceeds. A wrong model never blocks a turn.
 

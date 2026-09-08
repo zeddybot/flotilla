@@ -1,4 +1,11 @@
 .env
+.env.*
+!.env.example
+.context/
+.pytest_cache/
+.ruff_cache/
+dist/
+logs/
 *.sqlite
 *.sqlite-*
 __pycache__/
