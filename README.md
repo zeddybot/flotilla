@@ -1,6 +1,6 @@
 # Conductor for Slack
 
-A personal Slack app that drives the local Conductor Mac app. Mention **@Conductor** or DM it to create a TTD workspace. Replies in the same Slack thread continue that session; agent results replace a status message in the thread. You can open and continue the same workspace in Conductor.
+A personal Slack app that drives the local Conductor Mac app. Mention **@Conductor** or DM it to create a TTD workspace. Mention **@Conductor** on every channel follow-up to continue the same session; ordinary thread conversation is ignored. Direct messages do not require a mention. Agent results replace a status message in the thread. You can open and continue the same workspace in Conductor.
 
 Only the configured Slack owner can issue commands. The bridge reads Conductor's SQLite database in read-only mode and uses macOS Accessibility for all actions. It never writes Conductor's database. Ordinary messages typed in Conductor are not relayed.
 
@@ -26,7 +26,7 @@ OWNER_SLACK_USER_ID=your-slack-user-id
 SLACK_TEAM_ID=your-slack-team-id
 ```
 
-`.env` and local `config.toml` are gitignored. Credentials must have mode `600`; the daemon refuses group/world-readable `.env` files. Tokens are never written into the launchd plist. This uses [Bolt Socket Mode](https://docs.slack.dev/tools/bolt-python/concepts/socket-mode/) without a public HTTP endpoint. Channel events are subscribed in addition to mentions so unmentioned replies in a mapped thread work.
+`.env` and local `config.toml` are gitignored. Credentials must have mode `600`; the daemon refuses group/world-readable `.env` files. Tokens are never written into the launchd plist. This uses [Bolt Socket Mode](https://docs.slack.dev/tools/bolt-python/concepts/socket-mode/) without a public HTTP endpoint. Channel events and mention events are deduplicated, and channel messages require an explicit bot mention even in mapped threads.
 
 Verify the adapter, then install the daemon:
 
@@ -53,12 +53,12 @@ Invite **Conductor** to the channel first, then:
 
 ```text
 @Conductor [opus][high] investigate this bug
-[queue] also add a focused regression test
-[steer] stop that approach and inspect the API contract first
-[astra][max][fast] continue with this model
-[verbose] include tool activity in the thread
-[close]
-[new] start a fresh workspace for the next task
+@Conductor [queue] also add a focused regression test
+@Conductor [steer] stop that approach and inspect the API contract first
+@Conductor [astra][max][fast] continue with this model
+@Conductor [verbose] include tool activity in the thread
+@Conductor [close]
+@Conductor [new] start a fresh workspace for the next task
 ```
 
 The defaults are Fable 5.1, high effort, and steering. A follow-up while the agent is working goes into its running turn; `[queue]` waits and starts a separate turn afterward. An idle agent starts either kind immediately. The model tokens select Conductor's current picker labels: `[astra]` → GPT-6 Astra, `[sol]` → 5.6 Sol, `[terra]` → 5.6 Terra, `[luna]` → 5.6 Luna, and `[sonnet]` → Sonnet 5 1M.

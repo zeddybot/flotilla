@@ -136,6 +136,68 @@ def test_owner_team_bot_gate_and_overlapping_slack_events(tmp_path):
     conn.close()
 
 
+def test_channel_followups_require_mention_and_reuse_mapped_session(tmp_path):
+    store, conn, db, slack = fixture(tmp_path)
+    workspace = {"id": "w", "active_session_id": "s"}
+    config = Config()
+    options = parse("initial task", "B", config)[1]
+    store.bind("C1", "1", workspace, options)
+    sent, validated = [], []
+
+    def validate(wid, sid):
+        validated.append((wid, sid))
+        return workspace
+
+    conductor = SimpleNamespace(
+        db=db, validate=validate, send=lambda *args: sent.append(args) or ""
+    )
+    slack.call = lambda *args, **kwargs: {"permalink": "https://slack.test/message"}
+    bridge = Bridge(config, store, conductor, slack, "B", "U1", "T1")
+    event = {
+        "type": "message",
+        "channel_type": "channel",
+        "channel": "C1",
+        "thread_ts": "1",
+        "ts": "2",
+        "user": "U1",
+        "text": "talking to Lucas",
+    }
+    bridge.receive({"team_id": "T1", "event": event})
+    assert store.next_event() is None
+    event["text"] = "<@B> [queue] continue investigating"
+    bridge.receive({"team_id": "T1", "event": event})
+    bridge.receive({"team_id": "T1", "event": event | {"type": "app_mention"}})
+    assert len(store.rows("SELECT * FROM events")) == 1
+    bridge.process(store.next_event())
+    assert validated == [("w", "s")]
+    assert sent[0][:2] == ("w", "s")
+    assert sent[0][2].endswith("continue investigating")
+    assert sent[0][3]["send_mode"] == "queue"
+    assert store.thread("C1", "1")["session_id"] == "s"
+    conn.close()
+
+
+def test_pending_unmentioned_channel_event_is_ignored_but_dm_is_accepted(tmp_path):
+    store, conn, db, slack = fixture(tmp_path)
+    bridge = Bridge(Config(), store, SimpleNamespace(db=db), slack, "B", "U1", "T1")
+    event = {
+        "type": "message",
+        "channel_type": "channel",
+        "channel": "C1",
+        "thread_ts": "1",
+        "ts": "2",
+        "user": "U1",
+        "text": "talking to Lucas",
+    }
+    store.accept("old-event", event)
+    bridge.process(store.next_event())
+    assert store.rows("SELECT state FROM events")[0]["state"] == "ignored"
+    assert not slack.posts and not store.rows("SELECT * FROM statuses")
+    bridge.receive({"team_id": "T1", "event": event | {"channel_type": "im", "channel": "D1"}})
+    assert store.next_event() is not None
+    conn.close()
+
+
 def test_restart_picks_up_queued_row_updated_below_cursor_and_ignores_ui_turn(tmp_path):
     store, conn, db, slack = fixture(tmp_path)
     message(conn, "user", "slack-prompt", None, sent=None)

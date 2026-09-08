@@ -1,6 +1,6 @@
 # slack-conductor
 
-A personal Slack bot that drives the **local** Conductor Mac app. `@bot` in a Slack channel or DM creates a Conductor workspace and starts an agent turn; replies in the thread continue that agent; the agent's output comes back to the thread; the session stays a normal Conductor session you can take over in the app.
+A personal Slack bot that drives the **local** Conductor Mac app. `@bot` in a Slack channel or a DM creates a Conductor workspace and starts an agent turn; explicitly mentioned replies in the channel thread continue that agent (DM replies need no mention); the agent's output comes back to the thread; the session stays a normal Conductor session you can take over in the app.
 
 Everything below marked *verified* was exercised against Conductor 0.84.2 / Claude Code 2.1.257 on 2026-09-07.
 
@@ -47,7 +47,7 @@ Stack: Python 3.12 via `uv`; `slack-bolt` (Socket Mode); `pyobjc-framework-Appli
 
 - Socket Mode. App-level token with `connections:write`. No public URL.
 - Bot scopes: `app_mentions:read`, `chat:write`, `channels:history`, `groups:history`, `im:history`, `users:read`.
-- Events: `app_mention`, `message.im`, `message.channels`, `message.groups`. Channel message subscriptions are required for unmentioned replies in mapped threads.
+- Events: `app_mention`, `message.im`, `message.channels`, `message.groups`. All channel requests require an explicit bot mention, including follow-ups in mapped threads. DMs require no mention. Overlapping events are deduplicated.
 - Every event is dropped unless `event.user == OWNER_SLACK_USER_ID` and the sender is not a bot. Channel text is untrusted input to the agent.
 - Replies via `chat.postMessage` with `thread_ts`; status edits via `chat.update`; superseded status via `chat.delete`; permalink via `chat.getPermalink`. Slack's streaming API is not used (thread replies unsupported in ordinary channels).
 - Message text > 3900 chars is split into consecutive thread replies. Code fences are not split mid-block.
