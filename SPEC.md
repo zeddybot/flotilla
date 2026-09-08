@@ -66,7 +66,9 @@ Leading bracket tokens on the mention text, any order, case-insensitive. Sticky 
 | `[close]` | Archive the thread's workspace. |
 | `[verbose]` | Also post one line per tool call instead of only editing the status. |
 
-Defaults live in `config.toml`: `model = "Opus 5"`, `effort = "high"`, `repo = "/Users/sameer/Documents/work/prodex/ttd"`.
+Defaults live in `config.toml`: `model = "Opus 5"`, `effort = "high"`. The repo is fixed: every workspace is created in `/Users/sameer/Documents/work/prodex/ttd`; there is no per-message repo selection.
+
+Model and effort are **best effort**: the bridge tries to set them, verifies from `sessions`, and if Conductor ends up elsewhere it says so in the status message and proceeds. A wrong model never blocks a turn.
 
 ### Prompt header
 
@@ -160,7 +162,7 @@ Workspace lifecycle: `workspaces.state` `ready` → `archived` (worktree removed
 1. Reply in thread: `creating workspace`. Record `status_ts`.
 2. `open "conductor://prompt=<urlenc text>&path=<repo>"`. Poll `workspaces` (≤10 s) for the new row; store `workspace_id`, `session_id`.
 3. Ensure window; AXPress the sidebar link for `workspace_id`.
-4. Model: if the picker title ≠ target, open and AXPress the item. Effort: cycle to target. Fast: toggle if requested. Verify all three from `sessions`.
+4. Model: if the picker title ≠ target, open and AXPress the item. Effort: cycle to target, at most 8 presses. Fast: toggle if requested. Read all three back from `sessions`; on mismatch append `(model: <actual>, effort: <actual>)` to the status message and continue.
 5. Set editor value = header + text (the deep link's prefill is replaced, not appended). AXPress Send.
 6. Status → `starting agent`; poller takes over (see below).
 
@@ -193,7 +195,6 @@ create table threads (
   thread_ts      text not null,
   workspace_id   text not null,
   session_id     text not null,
-  repo_path      text not null,
   model          text, effort text, fast integer default 0, send_mode text default 'queue',
   verbose        integer default 0,
   state          text not null,            -- creating | idle | running | archived | broken
@@ -215,7 +216,7 @@ Everything else is read from `conductor.db` at the moment of use.
 | No Conductor window | AeroSpace switch; if still none after 5 s, post `Conductor not reachable` and leave the thread `idle` for retry on next mention. |
 | Selector missing | Post the selector name, attach tree snapshot to the log, abort the action. |
 | Deep link produced no row in 10 s | Post `workspace creation failed`, no retry (a second link would make a second workspace). |
-| Model/effort mismatch after 3 attempts | Post the mismatch and continue with whatever Conductor has. |
+| Model/effort mismatch | Best effort: note the actual values in the status message and continue. Never block a turn on it. |
 | `result.is_error` | Post as error, keep the last status line. |
 | Bridge restart mid-turn | Startup reconciliation above. |
 | Slack rate limit (429) | Honor `Retry-After`; status edits are already coalesced. |
@@ -256,8 +257,7 @@ slack-conductor/
 3. **Busy follow-ups**: queue detection, pickup, status handoff. `[close]`.
 4. **Hardening**: startup reconciliation, AeroSpace recovery, selector self-check, launchd.
 
-## Open questions
-
-- Effort cycle when the model lacks a level (e.g. `ultracode` on non-Fable models): does the button skip it? Detect by reading the DB after each press; stop after 8 presses.
-- Whether a deep link into a repo that Conductor has not loaded silently falls back to the first repo (docs say yes). Verify `workspace_path` prefix after creation and abort if it differs.
-- Conductor's session auto-title lands on `sessions.title` a minute after the first turn; worth mirroring into the status message header.
+## Resolved
+- Model/effort: best effort, never blocking (above).
+- Repo: always ttd. After creation the bridge still checks `workspace_path` starts with `~/conductor/workspaces/ttd/` and aborts the turn if Conductor fell back to a different repo.
+- Session auto-title is not mirrored into Slack.
