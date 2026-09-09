@@ -5,6 +5,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from .ax import Accessibility, attr, walk
+from .composer import prepare_prompt
 from .db import ConductorDB
 from .selectors import is_queued_prompt, model_menu_label
 
@@ -183,25 +184,18 @@ class Conductor:
         with self.ax.reachable():
             self.navigate(wid, sid)
             warning = self.options(sid, options)
-            editor = self.ax.require(self.ax.composer(), role="AXTextArea")
-            self.confirm_target(wid)
-            draft = str(attr(editor, "AXValue") or "")
-            if (
-                draft.strip()
-                and draft.rstrip("\n") != prompt.rstrip("\n")
-                and not draft.startswith("Slack workspace ")
-            ):
-                raise RuntimeError(
-                    "Conductor composer has an unsent draft; clear it before retrying"
-                )
-            self.ax.set(editor, "AXValue", prompt)
-            self.ax.wait(
-                lambda: str(attr(editor, "AXValue") or "").rstrip("\n") == prompt.rstrip("\n"),
-                "Conductor composer value did not match prompt",
+            prepare_prompt(
+                self.ax,
+                prompt,
+                lambda: (self.validate(wid, sid), self.confirm_target(wid)),
+                lambda editor: str(attr(editor, "AXValue") or ""),
             )
             busy = self.db.session(sid)["status"] == "working"
             self.validate(wid, sid)
             self.confirm_target(wid)
+            editor = self.ax.require(self.ax.composer(), role="AXTextArea")
+            if str(attr(editor, "AXValue") or "").rstrip("\n") != prompt.rstrip("\n"):
+                raise RuntimeError("Conductor composer changed before send; action stopped")
             if busy and options["send_mode"] != self.db.send_mode():
                 self.ax.cmd_enter(editor)
             else:
