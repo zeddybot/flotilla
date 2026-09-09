@@ -91,7 +91,9 @@ Incoming Slack messages are durably deduplicated by workspace/channel/message ti
 
 A heartbeat watchdog requests a daemon restart after 120 seconds without a new Socket Mode pong. Repeated socket creation does not reset this deadline: a running process can otherwise remain stuck reconnecting indefinitely. launchd restarts the process, and persisted turns resume. Messages never received during a Slack outage are not automatically recovered from channel history.
 
-Normal fenced code blocks stay together. A code block that itself exceeds 3,900 characters is split into separately fenced continuations so every Slack message remains bounded. Status updates are coalesced to at most one per 1.5 seconds per turn; rate-limit responses honor Slack's retry delay.
+Agent content uses Slack's native [Markdown blocks](https://docs.slack.dev/reference/block-kit/blocks/markdown-block/): headings, bold/italics (including nested emphasis), strikethrough, links, ordered/unordered lists, task lists, block quotes, dividers, tables, inline code, and fenced code blocks. All heading levels display at the same size; images become links. Code language tags enable syntax highlighting. The live status header stays above the formatted content, including on edits and continuations. Notification and accessibility fallback text is retained. If Slack rejects a Markdown payload (for example, more than 50 rendered blocks), the full text is delivered using Slack's basic text formatting instead.
+
+Normal fenced code blocks stay together. A code block that itself exceeds 3,900 characters is split into separately fenced continuations, retaining its language tag, so every Slack message remains bounded. Very long Markdown structures spanning messages may lose formatting at the split. Status updates are coalesced to at most one per 1.5 seconds per turn; rate-limit responses honor Slack's retry delay.
 
 Adapter-only commands:
 
