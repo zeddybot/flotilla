@@ -12,5 +12,6 @@ jobs:
       - run: uv run pytest tests/test_db.py tests/test_bridge.py tests/test_service.py tests/test_lifecycle.py tests/test_presentation.py tests/test_connection_health.py tests/test_composer.py tests/test_markdown.py -q
       - run: uv run pytest tests/test_file_links.py -q
       - run: uv run pytest tests/test_uploads.py -q
+      - run: uv run pytest tests/test_file_delivery.py -q
       - run: uv run ruff check src tests scripts
       - run: uv run ruff format --check src tests scripts

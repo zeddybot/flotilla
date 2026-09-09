@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from slack_sdk.errors import SlackApiError
 from test_bridge import fixture, status
 
 from slack_conductor.store import Store
@@ -97,4 +98,33 @@ def test_upload_failure_is_bounded_and_does_not_hide_the_answer(tmp_path):
     assert uploads.step(store.status(sid), plan)
     assert "Answer." in uploads.result(plan)[0]
     assert "upload failed" in uploads.result(plan)[0]
+    conn.close()
+
+
+def test_retry_finalization_when_slack_reports_unfinalized_file_as_deleted(tmp_path):
+    store, conn, _, slack = fixture(tmp_path)
+    sid = status(store, "request", "report")
+    row = store.status(sid)
+    item = {"name": "a.txt", "file_id": "F1", "phase": "confirm"}
+    plan = {"files": [item]}
+    clock = [0]
+    calls = []
+
+    def call(method, **kwargs):
+        calls.append(method)
+        if method == "files_info" and len(calls) == 1:
+            raise SlackApiError("unfinalized", {"error": "file_deleted"})
+        if method == "files_completeUploadExternal":
+            return {}
+        return {"file": {"permalink": "https://slack.test/F1", "mimetype": "text/plain"}}
+
+    slack.call = call
+    uploads = Uploads(store, slack, clock=lambda: clock[0])
+    uploads.step(row, plan)
+    assert item["phase"] == "complete"
+    clock[0] = 100
+    uploads.step(row, plan)
+    uploads.step(row, plan)
+    assert uploads.step(row, plan)
+    assert calls == ["files_info", "files_completeUploadExternal", "files_info"]
     conn.close()

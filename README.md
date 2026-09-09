@@ -97,6 +97,32 @@ Agent content uses Slack's native [Markdown blocks](https://docs.slack.dev/refer
 
 Replies split at Markdown boundaries to respect both message length and Slack's rendered-block limit. Headings and ordinary paragraphs stay intact; long lists split between items, and tables split between rows with repeated column headers (up to 99 data rows per table). Oversized paragraphs reopen emphasis, links, and inline code on continuation pages. Long fenced code blocks retain their language tag and split between lines when possible. Each continuation retains its status header and uses the existing resumable delivery bookkeeping. The text fallback above is a last resort for Markdown Slack still rejects, rather than the normal way of handling long or heading-heavy replies. An individual table row or URL larger than a message may not retain its original formatting. Status updates are coalesced to at most one per 1.5 seconds per turn; rate-limit responses honor Slack's retry delay.
 
+Final replies can include files using ordinary Markdown anywhere in the answer:
+
+~~~markdown
+Fixed the dashboard:
+
+![Updated dashboard](.context/dashboard.png)
+
+Download the [results](.context/results.csv).
+~~~
+
+Relative paths resolve against the mapped Conductor workspace; absolute paths and local
+file URLs also work. Images using PNG, JPEG, or GIF render inline, and other files get
+downloadable Slack links and attachments on the same reply. Web links, source locations
+such as app.py:42 or app.py#L42, and examples inside code blocks stay unchanged.
+Only link local files intended for everyone in the Slack conversation.
+
+The bridge waits for the final answer and all tracked background work, snapshots the
+selected files, and shows **📤 Sending · N files** while uploading. Steering follows the
+replacement reply; queued requests retain separate files. Upload IDs and progress survive
+restarts. Missing files or uploads that fail after bounded retries preserve the answer
+and show Needs attention with a reason beside each unavailable file. Limits are 10 distinct
+files per reply and 25 MiB per file; unsupported image formats remain downloadable files.
+Snapshots are removed after delivery. The app needs **files:write** for uploads and
+**files:read** to recover ambiguous finalization and retrieve file links; reinstall the
+Slack app after adding these scopes to an existing installation.
+
 Adapter-only commands:
 
 ```sh

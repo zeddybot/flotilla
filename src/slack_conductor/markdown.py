@@ -20,7 +20,9 @@ def _cost(tokens):
         "bullet_list_open",
         "ordered_list_open",
     }
-    return sum(t.type in kinds and not t.hidden for t in tokens)
+    return sum(t.type in kinds and not t.hidden for t in tokens) + sum(
+        2 for t in tokens for child in (t.children or []) if child.type == "image"
+    )
 
 
 def _escape(text):
@@ -43,9 +45,9 @@ def _slices(text, limit, lines=False):
         yield text
 
 
-def _inline(text, limit):
+def _inline(text, limit, budget=BLOCK_BUDGET):
     """Reopen emphasis, links and inline code when a single paragraph is oversized."""
-    stack, page = [], ""
+    stack, page, weight = [], "", 0
     for token in MD.parseInline(text)[0].children:
         if token.nesting == 1:
             pair = {
@@ -72,8 +74,12 @@ def _inline(text, limit):
         elif token.type in {"softbreak", "hardbreak"}:
             value = "\n"
         elif token.type == "image":
-            prefix += "["
+            prefix += "!["
             suffix = f"]({token.attrGet('src')})" + suffix
+            if page and weight + 2 >= budget:
+                yield page
+                page, weight = "", 0
+            weight += 2
         if len(prefix + suffix) >= limit - 2:
             # A URL/delimiter larger than a message cannot be a single Slack link.
             value = prefix + value + suffix
@@ -86,6 +92,7 @@ def _inline(text, limit):
             if page and len(page + wrapped) > limit:
                 yield page
                 page = ""
+                weight = 2 if token.type == "image" else 0
             page += wrapped
     if page:
         yield page
@@ -137,7 +144,7 @@ def _large(source, limit, budget):
     else:
         prefix = "#" * int(first.tag[1:]) + " " if first.type == "heading_open" else ""
         inline = next((t.content for t in tokens if t.type == "inline"), source)
-        for piece in _inline(inline, limit - len(prefix)):
+        for piece in _inline(inline, limit - len(prefix), budget):
             yield prefix + piece
 
 

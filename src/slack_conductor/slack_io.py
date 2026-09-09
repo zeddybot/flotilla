@@ -22,25 +22,26 @@ class SlackIO:
                     raise
                 time.sleep(max(1, int(exc.response.headers.get("Retry-After", "1"))))
 
-    def post(self, channel, thread_ts, text, key):
+    def post(self, channel, thread_ts, text, key, *, images=None):
         return self._message(
             "chat_postMessage",
             channel=channel,
             thread_ts=thread_ts,
             text=text,
-            blocks=blocks(text),
+            blocks=blocks(text, images),
             client_msg_id=str(uuid.uuid5(uuid.NAMESPACE_URL, key)),
             unfurl_links=False,
             unfurl_media=False,
         )["ts"]
 
-    def edit(self, status, text):
+    def edit(self, status, text, *, images=None, file_ids=None):
         self._message(
             "chat_update",
             channel=status["channel"],
             ts=status["status_ts"],
             text=text,
-            blocks=blocks(text),
+            blocks=blocks(text, images),
+            **({"file_ids": file_ids} if file_ids else {}),
         )
 
     def _message(self, method, **kwargs):

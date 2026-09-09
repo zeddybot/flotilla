@@ -40,8 +40,14 @@ def prompt_header(channel, thread_ts, message_ts, permalink, text):
     return (
         f"[slack] channel={channel} thread_ts={thread_ts} message_ts={message_ts} permalink={permalink}\n"
         "You already have Slack tools; read the thread or channel yourself if you need more context.\n"
-        "The bridge relays your final reply to this thread. Do not post to Slack yourself.\n\n"
-        + text
+        "The bridge relays your final reply to this thread. Do not post to Slack yourself.\n"
+        "To share files, include ordinary Markdown links anywhere in your final reply: "
+        "[label](path/to/file) or ![caption](path/to/image.png). The bridge uploads local files "
+        "after all background work finishes; image syntax displays PNG/JPEG/GIF previews. "
+        "Relative paths resolve against this workspace; absolute paths also work. "
+        "Only link files you intend to share with everyone in this Slack conversation. "
+        "Links with source line numbers (file.py:42 or file.py#L42) remain code references. "
+        "Keep files available until delivery. Maximum 10 files, 25 MiB each.\n\n" + text
     )
 
 
