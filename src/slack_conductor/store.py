@@ -36,6 +36,10 @@ class Store:
                 conn.execute(
                     "ALTER TABLE statuses ADD COLUMN discard_ts TEXT NOT NULL DEFAULT '[]'"
                 )
+            if "attachments" not in columns:
+                conn.execute(
+                    "ALTER TABLE statuses ADD COLUMN attachments TEXT NOT NULL DEFAULT '{}'"
+                )
         path.chmod(0o600)
 
     @contextmanager
@@ -118,6 +122,7 @@ class Store:
             "delivered",
             "tracking",
             "discard_ts",
+            "attachments",
         }
         if not values.keys() <= allowed:
             raise ValueError("Unknown status field")
