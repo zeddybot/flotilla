@@ -1,5 +1,7 @@
 # Conductor for Slack
 
+The planned successor is **Flotilla**, a shared Slack app with per-user clients and plugin-based agent profiles. See the [design decisions and discussion record](docs/flotilla-design.md) and [Daytona transport qualification](docs/daytona-transport.md). These describe the future architecture; the instructions below describe the deployed personal bridge.
+
 A personal Slack app that drives the local Conductor Mac app. Mention **@Conductor** or DM it to create a TTD workspace. Mention **@Conductor** on every channel follow-up to continue the same session; ordinary thread conversation is ignored. Direct messages do not require a mention. Agent results replace a status message in the thread. You can open and continue the same workspace in Conductor.
 
 Only the configured Slack owner can issue commands. The bridge reads Conductor's SQLite database in read-only mode and uses macOS Accessibility for all actions. It never writes Conductor's database. Ordinary messages typed in Conductor are not relayed.
