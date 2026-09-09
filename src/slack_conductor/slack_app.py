@@ -5,6 +5,7 @@ import time
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
+from .connection_health import ConnectionHealth
 from .poller import Poller
 from .presentation import render
 from .protocol import parse, prompt_header
@@ -158,13 +159,15 @@ def run(config, store, conductor, creds, stop):
     conductor.ax.check()
     bridge.poller.reconcile()
     handler = SocketModeHandler(app, creds["SLACK_APP_TOKEN"])
-    handler.connect()
-    log.info(
-        "Conductor Slack bridge connected to %s; owner %s",
-        auth["team"],
-        creds["OWNER_SLACK_USER_ID"],
-    )
+    health = ConnectionHealth(handler.client, stop)
+    health.start()
     try:
+        handler.connect()
+        log.info(
+            "Conductor Slack bridge connected to %s; owner %s",
+            auth["team"],
+            creds["OWNER_SLACK_USER_ID"],
+        )
         while not stop.is_set():
             started = time.monotonic()
             envelope = store.next_event()
@@ -172,5 +175,8 @@ def run(config, store, conductor, creds, stop):
                 bridge.process(envelope)
             bridge.poller.tick()
             stop.wait(max(0.05, 1 - (time.monotonic() - started)))
+        if health.failed:
+            raise ConnectionError("Socket Mode stalled; launchd will restart the daemon")
     finally:
+        health.close()
         handler.close()
