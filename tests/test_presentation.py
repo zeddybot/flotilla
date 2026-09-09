@@ -210,3 +210,26 @@ def test_error_result_renders_failed_and_preserves_partial_answer(tmp_path):
     Poller(store, db, slack, settle_seconds=0).tick()
     assert slack.edits[-1][1] == render("failed", "Tests failed; changes retained.")
     conn.close()
+
+
+def test_block_limit_continuations_resume_after_delivery_failure(tmp_path):
+    store, conn, db, slack = fixture(tmp_path)
+    sid = status(store, "e1", "task")
+    message(conn, "user", "task", "turn")
+    answer = "\n\n".join(f"# Heading {i}" for i in range(75))
+    result(conn, answer, "turn")
+    original_post = slack.post
+
+    def interrupted(*args):
+        raise RuntimeError("Slack unavailable")
+
+    slack.post = interrupted
+    Poller(store, db, slack, settle_seconds=0).tick()
+    assert store.status(sid)["delivered"] == 1
+    assert store.status(sid)["state"] == "delivering"
+    slack.post = original_post
+    Poller(store, db, slack, settle_seconds=0).reconcile()
+    assert len(slack.edits) == 1
+    assert [p[2] for p in slack.posts] == pages("done", answer)[1:]
+    assert store.status(sid)["state"] == "complete"
+    conn.close()
