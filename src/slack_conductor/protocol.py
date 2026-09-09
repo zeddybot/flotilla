@@ -63,13 +63,17 @@ def chunks(text, limit=3900):
             continue
         fenced = piece.startswith("```") and piece.endswith("```")
         body = piece[3:-3] if fenced else piece
-        budget = limit - 8 if fenced else limit
+        opening = "```"
+        if fenced and (info := re.match(r"([\w+-]{0,32})\n", body)):
+            opening += info[0]
+            body = body[info.end() :]
+        budget = limit - len(opening) - 4 if fenced else limit
         while len(body) > budget:
             cut = body.rfind("\n", 0, budget + 1)
             cut = cut + 1 if cut > 0 else budget
             part, body = body[:cut], body[cut:]
-            output.append("```" + part + "\n```" if fenced else part)
-        current = "```" + body + "```" if fenced else body
+            output.append(opening + part + "\n```" if fenced else part)
+        current = opening + body + "```" if fenced else body
     if current:
         output.append(current)
     return output or ["Agent finished without a text reply."]

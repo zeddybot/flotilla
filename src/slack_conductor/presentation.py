@@ -38,6 +38,15 @@ def render(phase, content="", detail="", note=""):
     return pages(phase, content, detail, note)[0]
 
 
+def blocks(text):
+    """Keep the status in Slack syntax; let Slack render the agent's Markdown."""
+    header, _, body = text.partition("\n\n")
+    output = [{"type": "section", "text": {"type": "mrkdwn", "text": header}}]
+    if body:
+        output.append({"type": "markdown", "text": body})
+    return output
+
+
 def live(turn, note=""):
     phase, detail = turn.phase, turn.detail
     if turn.tasks:
