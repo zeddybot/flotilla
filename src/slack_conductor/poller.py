@@ -103,6 +103,10 @@ class Poller:
                 log.exception("Polling failed for status %s", status["id"])
 
     def poll(self, status):
+        if status["discard_ts"] != "[]":
+            # Populate the replacement before deleting the older response. If
+            # either Slack action fails, durable cleanup resumes on the next tick.
+            self.slack.edit(status, live(Turn.load(status["tracking"]), status["note"]))
         for ts in json.loads(status["discard_ts"]):
             self.slack.delete(dict(status, status_ts=ts))
         if status["discard_ts"] != "[]":

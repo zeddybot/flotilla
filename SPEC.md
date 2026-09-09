@@ -10,7 +10,7 @@ In:
 - Slack → Conductor: user messages only (new workspace, follow-up, queued follow-up, archive).
 - Conductor → Slack: agent output only. Turns you type in the Conductor UI are not relayed.
 - Per-thread model, effort, fast mode, send mode via bracket tokens.
-- One edited message per run: emoji/status, optional detail, and latest agent content. Steering retains the original message; queued requests get separate messages.
+- One edited message per run: emoji/status, optional detail, and latest agent content. Steering moves the response below the latest steering message and deletes the old response; queued requests keep separate messages.
 
 Out:
 - Cloud workspaces (Conductor's public API is cloud-only; irrelevant here).
@@ -174,7 +174,7 @@ Ensure window, navigate, set editor, Send. Status message as above.
 1. Reply: `enqueuing message`.
 2. Navigate, set editor. If effective mode is `queue` and the user default is `steering` (or vice versa), Cmd+Enter; else Send.
 3. Queue mode: confirm the text under "Queued" in the tree → status `queued`. Pickup = a new `user` row with this text and a fresh `turn_id`. Steer mode: pickup = the `user` row appears immediately (same `turn_id`); status `steering`.
-4. On steering pickup: transfer the original Slack message and lifecycle atomically, then remove the new temporary acknowledgment. Queueing retains separate messages.
+4. On steering pickup: atomically transfer the lifecycle to the new acknowledgment below the steer and record the old response for deletion. Populate the new message with the preserved status/content before deleting the old one; cleanup retries across restarts. Queueing retains the previous response through Done and uses a separate message.
 5. Multiple queued follow-ups: one status message each, matched to their `user` row by text and order.
 
 ### Poller (per active turn)
