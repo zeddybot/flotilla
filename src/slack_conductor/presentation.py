@@ -2,7 +2,7 @@
 
 import html
 
-from .protocol import chunks
+from .markdown import markdown_chunks
 
 STATES = {
     "creating": ("🏗️", "Creating workspace"),
@@ -27,7 +27,7 @@ def pages(phase, content="", detail="", note=""):
     header = f"{emoji} *{label}*" + (f" · {detail}" if detail else "")
     body = content + (f"\n\nNote: {note}" if note else "")
     # Reserve room for the header, including escaped characters and continuation.
-    parts = chunks(body.strip(), limit=3900 - len(header) - 20) if body.strip() else [""]
+    parts = markdown_chunks(body.strip(), limit=3900 - len(header) - 20) if body.strip() else [""]
     return [
         header + (" · continued" if i else "") + (f"\n\n{part}" if part else "")
         for i, part in enumerate(parts)
