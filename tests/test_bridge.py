@@ -42,8 +42,8 @@ def fixture(tmp_path):
     return store, conn, db, slack
 
 
-def status(store, key, prompt, cursor=0):
-    sid = store.add_status(key, "C1", "1", prompt, {"verbose": False})
+def status(store, key, prompt, cursor=0, *, send_mode="steer"):
+    sid = store.add_status(key, "C1", "1", prompt, {"verbose": False, "send_mode": send_mode})
     store.update(
         sid,
         status_ts=f"status-{sid}",

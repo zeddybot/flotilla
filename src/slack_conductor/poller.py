@@ -72,21 +72,42 @@ class Poller:
                 )
         self.tick()
 
+    def handoff(self, status, pickup):
+        if json.loads(status["options"]).get("send_mode", "steer") != "steer":
+            return status
+        previous = self.store.rows(
+            "SELECT * FROM statuses WHERE session_id=? AND channel=? AND thread_ts=? "
+            "AND id<? AND turn_id IS NOT NULL AND state!='superseded' "
+            "ORDER BY id DESC LIMIT 1",
+            (status["session_id"], status["channel"], status["thread_ts"], status["id"]),
+        )
+        if not previous or previous[0]["state"] != "active":
+            return status
+        old = previous[0]
+        turn, cursor = Turn.load(old["tracking"]), old["cursor"]
+        # A background run can outlive its native turn ID. Catch up only to the
+        # new user message so its stop notification/result cannot be claimed by
+        # the old reply. Jobs may have started or finished since the last poll.
+        for row in self.db.messages(old["session_id"], cursor):
+            if row["seq"] >= pickup["seq"]:
+                break
+            if turn.accepts(row, old["turn_id"]):
+                turn.consume(row)
+            cursor = row["seq"]
+        if old["turn_id"] != pickup["turn_id"] and not (turn.tasks or turn.awaiting_callback):
+            return status
+        self.store.handoff(status["id"], old["id"], tracking=turn.dump(), cursor=cursor)
+        self.idle_since.pop(old["id"], None)
+        self.last_text.pop(old["id"], None)
+        return self.store.status(status["id"])
+
     def tick(self):
         for status in self.store.active():
             try:
                 if status["state"] == "waiting":
                     pickup = self.db.pickup(status["session_id"], status["prompt"])
                     if pickup:
-                        for old in self.store.rows(
-                            "SELECT * FROM statuses WHERE session_id=? AND turn_id=? "
-                            "AND state='active' AND id<?",
-                            (status["session_id"], pickup["turn_id"], status["id"]),
-                        ):
-                            self.store.handoff(status["id"], old["id"])
-                            self.idle_since.pop(old["id"], None)
-                            self.last_text.pop(old["id"], None)
-                            status = self.store.status(status["id"])
+                        status = self.handoff(status, pickup)
                         self.store.update(
                             status["id"],
                             state="active",

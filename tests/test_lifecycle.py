@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from test_bridge import fixture, message, result, status
 
 from slack_conductor.lifecycle import Turn
@@ -7,8 +8,117 @@ from slack_conductor.poller import Poller
 from slack_conductor.store import Store
 
 
-def event(conn, subtype, **values):
-    message(conn, "assistant", json.dumps({"type": "system", "subtype": subtype, **values}), "turn")
+def event(conn, subtype, *, turn="turn", **values):
+    message(conn, "assistant", json.dumps({"type": "system", "subtype": subtype, **values}), turn)
+
+
+@pytest.mark.parametrize("polled_job", [False, True])
+@pytest.mark.parametrize("callback_pending", [False, True])
+def test_background_steer_on_new_turn_moves_job_and_answer_below_followup(
+    tmp_path, polled_job, callback_pending
+):
+    store, conn, db, slack = fixture(tmp_path)
+    first = status(store, "first", "watch deploy")
+    message(conn, "user", "watch deploy", "turn")
+    poller = Poller(store, db, slack, settle_seconds=0)
+    poller.tick()
+    event(conn, "task_started", task_id="deploy", description="staging deployment")
+    result(conn, "Waiting for deployment.", "turn")
+    if callback_pending:
+        event(conn, "task_notification", task_id="deploy", status="completed")
+    if polled_job:
+        poller.tick()
+    second = status(store, "second", "stop watching", cursor=db.cursor("s"))
+    message(conn, "user", "stop watching", "newer")
+    poller.tick()
+    inherited = Turn.load(store.status(second)["tracking"])
+    assert inherited.content == "Waiting for deployment."
+    assert inherited.awaiting_callback if callback_pending else "deploy" in inherited.tasks
+    assert store.status(first)["state"] == "superseded"
+    assert slack.deletes == ["status-1"]
+    assert slack.edits[-1][0] == "status-2"
+    # Pickup and inherited job ownership must survive daemon restart.
+    poller = Poller(Store(store.path), db, slack, settle_seconds=0)
+    poller.reconcile()
+    event(conn, "task_notification", task_id="deploy", status="stopped", turn="newer")
+    result(conn, "Stopped the staging deploy watch.", "newer")
+    poller.tick()
+    assert store.status(second)["state"] == "complete"
+    assert store.status(second)["result"] == "Stopped the staging deploy watch."
+    assert not Turn.load(store.status(second)["tracking"]).ignore_callback
+    assert not any("Stopped the staging" in text for ts, text in slack.edits if ts == "status-1")
+    conn.close()
+
+
+@pytest.mark.parametrize("completed_before_followup", [False, True])
+def test_background_handoff_uses_state_at_each_user_message_when_polling_catches_up(
+    tmp_path, completed_before_followup
+):
+    store, conn, db, slack = fixture(tmp_path)
+    first = status(store, "first", "watch deploy")
+    message(conn, "user", "watch deploy", "turn")
+    event(conn, "task_started", task_id="deploy")
+    result(conn, "Waiting for deployment.", "turn")
+    poller = Poller(store, db, slack, settle_seconds=0)
+    poller.tick()
+    if completed_before_followup:
+        event(conn, "task_notification", task_id="deploy", status="completed")
+        result(conn, "Deployment verified.", "turn")
+    second = status(store, "second", "stop watching", cursor=db.cursor("s"))
+    message(conn, "user", "stop watching", "stop")
+    if not completed_before_followup:
+        event(conn, "task_notification", task_id="deploy", status="stopped", turn="stop")
+    result(conn, "Stopped watching.", "stop")
+    third = status(store, "third", "watch again", cursor=db.cursor("s"))
+    message(conn, "user", "watch again", "restart")
+    event(conn, "task_started", task_id="new-deploy", turn="restart")
+    result(conn, "Watching again.", "restart")
+    # All three native turns are available in one poll, as after slow Slack IO.
+    poller.tick()
+    if completed_before_followup:
+        assert store.status(first)["state"] == "complete"
+        assert store.status(first)["result"] == "Deployment verified."
+        assert slack.deletes == []
+    else:
+        assert store.status(first)["state"] == "superseded"
+        assert slack.deletes == ["status-1"]
+    assert store.status(second)["state"] == "complete"
+    assert store.status(second)["result"] == "Stopped watching."
+    assert store.status(third)["state"] == "active"
+    assert Turn.load(store.status(third)["tracking"]).tasks == {"new-deploy": "background job"}
+    conn.close()
+
+
+def test_waiting_queue_does_not_hide_running_job_from_later_steer(tmp_path):
+    store, conn, db, slack = fixture(tmp_path)
+    first = status(store, "first", "watch deploy")
+    message(conn, "user", "watch deploy", "turn")
+    event(conn, "task_started", task_id="deploy")
+    result(conn, "Waiting for deployment.", "turn")
+    poller = Poller(store, db, slack, settle_seconds=0)
+    poller.tick()
+    queued = status(store, "queued", "next task", send_mode="queue")
+    message(conn, "user", "next task", None, sent=None)
+    steer = status(store, "steer", "stop watching", cursor=db.cursor("s"))
+    message(conn, "user", "stop watching", "stop")
+    event(conn, "task_notification", task_id="deploy", status="stopped", turn="stop")
+    result(conn, "Stopped watching.", "stop")
+    poller.tick()
+    assert store.status(first)["state"] == "superseded"
+    assert store.status(steer)["state"] == "complete"
+    assert store.status(steer)["result"] == "Stopped watching."
+    assert store.status(queued)["state"] == "waiting"
+    assert slack.deletes == ["status-1"]
+    conn.execute(
+        "UPDATE session_messages SET turn_id='queue',sent_at='now' WHERE content='next task'"
+    )
+    conn.commit()
+    result(conn, "Queued task done.", "queue")
+    poller.tick()
+    assert store.status(queued)["state"] == "complete"
+    assert store.status(queued)["result"] == "Queued task done."
+    assert slack.deletes == ["status-1"]
+    conn.close()
 
 
 def test_preview_wait_resumes_after_restart_and_only_finishes_after_callback(tmp_path):
@@ -100,7 +210,7 @@ def test_callback_on_newer_turn_updates_job_owner_without_overwriting_queued_rep
     result(conn, "Waiting for build.", "turn")
     poller = Poller(store, db, slack, settle_seconds=0)
     poller.tick()
-    second = status(store, "second", "queued", cursor=db.cursor("s"))
+    second = status(store, "second", "queued", cursor=db.cursor("s"), send_mode="queue")
     message(conn, "user", "queued", "newer")
     result(conn, "Queued request answer.", "newer")
     conn.execute("UPDATE sessions SET status='working'")
