@@ -87,6 +87,8 @@ The private state directory contains `bridge.sqlite`, `daemon.lock`, rotating `d
 
 Incoming Slack messages are durably deduplicated by workspace/channel/message timestamp, including overlapping mention and message events. Restart recovery resumes queued/running turns and partially delivered results. It never blindly replays an interrupted UI send. If delivery is ambiguous, check Conductor before retrying. Slack and local SQLite cannot commit atomically: deterministic Slack message IDs reduce duplicate posts, but this is not an exactly-once transport.
 
+A heartbeat watchdog requests a daemon restart after 120 seconds without a new Socket Mode pong. Repeated socket creation does not reset this deadline: a running process can otherwise remain stuck reconnecting indefinitely. launchd restarts the process, and persisted turns resume. Messages never received during a Slack outage are not automatically recovered from channel history.
+
 Normal fenced code blocks stay together. A code block that itself exceeds 3,900 characters is split into separately fenced continuations so every Slack message remains bounded. Status updates are coalesced to at most one per 1.5 seconds per turn; rate-limit responses honor Slack's retry delay.
 
 Adapter-only commands:
