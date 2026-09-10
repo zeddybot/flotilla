@@ -123,7 +123,7 @@ class Uploads:
                 try:
                     info = self.slack.call("files_info", file=item["file_id"])["file"]
                 except SlackApiError as exc:
-                    if exc.response.get("error") != "file_not_found":
+                    if exc.response.get("error") not in {"file_not_found", "file_deleted"}:
                         raise
                     item["phase"] = "complete"
                     raise

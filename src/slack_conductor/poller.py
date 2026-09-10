@@ -5,6 +5,7 @@ import time
 from .conductor.db import classify
 from .lifecycle import Turn
 from .presentation import live, pages, render
+from .uploads import Uploads
 
 log = logging.getLogger(__name__)
 
@@ -15,6 +16,7 @@ class Poller:
         self.idle_since = {}
         self.last_text = {}
         self.clock, self.settle_seconds = clock, settle_seconds
+        self.uploads = Uploads(store, slack, clock=clock)
 
     def finish(self, status, text, phase="done", detail=""):
         turn = Turn.load(status["tracking"])
@@ -26,19 +28,43 @@ class Poller:
         turn = Turn.load(status["tracking"])
         # Existing delivering rows from older runtimes have no presentation state.
         phase = turn.phase if turn.phase in {"done", "failed", "attention", "archived"} else "done"
-        parts = pages(phase, status["result"], turn.detail, status["note"])
+        content, images, file_ids = status["result"], {}, []
+        if phase in {"done", "failed"} and (
+            not status["delivered"] or status["attachments"] != "{}"
+        ):
+            plan = json.loads(status["attachments"])
+            if not plan:
+                workspace = self.db.workspace(status["workspace_id"])
+                plan = self.uploads.prepare(status, workspace.get("workspace_path"))
+            if not self.uploads.step(status, plan):
+                text = render("sending", content, f"{len(plan['files'])} files", status["note"])
+                if self.last_text.get(status["id"]) != text:
+                    self.slack.edit(status, text)
+                    self.last_text[status["id"]] = text
+                return
+            content, images, file_ids = self.uploads.result(plan)
+            if any(f.get("error") for f in plan["files"]):
+                phase = "attention"
+                turn.detail = "some files could not be sent"
+        parts = pages(phase, content, turn.detail, status["note"])
         for index in range(status["delivered"], len(parts)):
             if index == 0:
-                self.slack.edit(status, parts[index])
+                self.slack.edit(
+                    status,
+                    parts[index],
+                    **({"images": images, "file_ids": file_ids} if file_ids else {}),
+                )
             else:
                 self.slack.post(
                     status["channel"],
                     status["thread_ts"],
                     parts[index],
                     f"result:{status['id']}:{index}:{status['event_key']}",
+                    **({"images": images} if images else {}),
                 )
             self.store.update(status["id"], delivered=index + 1)
         self.store.update(status["id"], state="complete")
+        self.uploads.cleanup(self.store.status(status["id"]))
         self.idle_since.pop(status["id"], None)
         self.last_text.pop(status["id"], None)
         if not self.store.rows(

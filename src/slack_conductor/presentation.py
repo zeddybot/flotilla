@@ -2,6 +2,7 @@
 
 import html
 
+from .file_links import image_blocks
 from .markdown import markdown_chunks
 
 STATES = {
@@ -11,6 +12,7 @@ STATES = {
     "working": ("⚙️", "Working"),
     "waiting": ("⏳", "Waiting"),
     "queued": ("🕓", "Queued"),
+    "sending": ("📤", "Sending"),
     "done": ("✅", "Done"),
     "attention": ("🙋", "Needs attention"),
     "unconfirmed": ("⚠️", "Needs attention"),
@@ -38,12 +40,14 @@ def render(phase, content="", detail="", note=""):
     return pages(phase, content, detail, note)[0]
 
 
-def blocks(text):
+def blocks(text, images=None):
     """Keep the status in Slack syntax; let Slack render the agent's Markdown."""
     header, _, body = text.partition("\n\n")
     output = [{"type": "section", "text": {"type": "mrkdwn", "text": header}}]
     if body:
-        output.append({"type": "markdown", "text": body})
+        output.extend(
+            image_blocks(body, images) if images else [{"type": "markdown", "text": body}]
+        )
     return output
 
 
