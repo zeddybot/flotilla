@@ -1,0 +1,100 @@
+import json
+from pathlib import Path
+
+from test_bridge import fixture, status
+
+from slack_conductor.store import Store
+from slack_conductor.uploads import Uploads
+
+
+def test_snapshot_and_finalize_recovery_reuse_the_same_file_id(tmp_path):
+    store, conn, _, slack = fixture(tmp_path)
+    source = tmp_path / "report.csv"
+    source.write_text("original")
+    sid = status(store, "request", "report")
+    store.update(sid, result="[report](report.csv) and [again](./report.csv)")
+    row = store.status(sid)
+    calls, sent, finished = [], [], []
+
+    def call(method, **kwargs):
+        calls.append(method)
+        if method == "files_getUploadURLExternal":
+            return {"file_id": "F1", "upload_url": "https://files.slack.com/upload/test"}
+        if method == "files_completeUploadExternal":
+            finished.append("F1")
+            raise OSError("response lost after success")
+        if method == "files_info":
+            assert finished
+            return {
+                "file": {"id": "F1", "permalink": "https://slack.test/F1", "mimetype": "text/csv"}
+            }
+        raise AssertionError(method)
+
+    slack.call = call
+    now = [0]
+    uploads = Uploads(
+        store,
+        slack,
+        clock=lambda: now[0],
+        send_bytes=lambda url, path: sent.append(Path(path).read_text()),
+    )
+    plan = uploads.prepare(row, tmp_path)
+    assert len(plan["files"]) == 1
+    source.unlink()
+    assert Path(plan["files"][0]["snapshot"]).stat().st_mode & 0o077 == 0
+    for _ in range(3):
+        uploads.step(row, plan)
+    assert plan["files"][0]["phase"] == "confirm"
+    # Restart after Slack accepted finalization but the response was lost.
+    now[0] = 100
+    uploads = Uploads(Store(store.path), slack, clock=lambda: now[0])
+    plan = json.loads(store.status(sid)["attachments"])
+    assert not uploads.step(row, plan)
+    assert uploads.step(row, plan)
+    text, images, ids = uploads.result(plan)
+    assert text == "[report](https://slack.test/F1) and [again](https://slack.test/F1)"
+    assert not images and ids == ["F1"]
+    assert sent == ["original"] and finished == ["F1"]
+    assert calls.count("files_getUploadURLExternal") == 1
+    uploads.cleanup(store.status(sid))
+    assert not Path(plan["files"][0]["snapshot"]).exists()
+    conn.close()
+
+
+def test_missing_and_nonregular_files_preserve_answer_without_uploads(tmp_path):
+    store, conn, _, slack = fixture(tmp_path)
+    sid = status(store, "request", "report")
+    store.update(sid, result="Answer. [missing](gone.pdf) [folder](.) [source](app.py:42)")
+    uploads = Uploads(store, slack, clock=lambda: 0)
+    plan = uploads.prepare(store.status(sid), tmp_path)
+    assert uploads.step(store.status(sid), plan)
+    text, _, ids = uploads.result(plan)
+    assert text.startswith("Answer.") and text.count("file unavailable") == 2
+    assert "[source](app.py:42)" in text and not ids
+    conn.close()
+
+
+def test_upload_failure_is_bounded_and_does_not_hide_the_answer(tmp_path):
+    store, conn, _, slack = fixture(tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+    sid = status(store, "request", "report")
+    store.update(sid, result="Answer. [file](a.txt)")
+    now = [0]
+    uploads = Uploads(store, slack, clock=lambda: now[0])
+    plan = uploads.prepare(store.status(sid), tmp_path)
+    calls = []
+
+    def offline(*args, **kwargs):
+        calls.append(args)
+        raise OSError("offline")
+
+    slack.call = offline
+    for _ in range(5):
+        uploads.step(store.status(sid), plan)
+        uploads.step(store.status(sid), plan)  # Backoff prevents a retry every poll.
+        now[0] += 100
+    assert len(calls) == 5
+    assert uploads.step(store.status(sid), plan)
+    assert "Answer." in uploads.result(plan)[0]
+    assert "upload failed" in uploads.result(plan)[0]
+    conn.close()
