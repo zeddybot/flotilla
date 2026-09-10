@@ -202,6 +202,70 @@ def test_foreign_and_nested_events_do_not_change_lifecycle():
     assert not turn.content and not turn.result_seq
 
 
+@pytest.mark.parametrize("completion", [{}, {"result": None}, {"result": ""}])
+def test_codex_completion_preserves_final_text_after_restart_and_steer(tmp_path, completion):
+    store, conn, db, slack = fixture(tmp_path)
+    first = status(store, "first", "investigate")
+    message(conn, "user", "investigate", "turn")
+    poller = Poller(store, db, slack, settle_seconds=0)
+    poller.tick()
+    second = status(store, "second", "related incident", cursor=db.cursor("s"))
+    message(conn, "user", "related incident", "turn")
+    final = "Created the ticket. [Stack](https://example.com/pr/1).\n\nWaiting for approval."
+    message(
+        conn,
+        "assistant",
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": final}]},
+            }
+        ),
+        "turn",
+    )
+    poller.tick()
+    assert store.status(first)["state"] == "superseded"
+    assert Turn.load(store.status(second)["tracking"]).content == final
+    message(
+        conn,
+        "assistant",
+        json.dumps(
+            {
+                "type": "result",
+                "conductor_sdk_metadata": {"model": "gpt-6-astra"},
+                **completion,
+            }
+        ),
+        "turn",
+    )
+    Poller(Store(store.path), db, slack, settle_seconds=0).reconcile()
+    assert store.status(second)["state"] == "complete"
+    assert store.status(second)["result"] == final
+    assert slack.edits[-1][0] == f"status-{second}"
+    assert final in slack.edits[-1][1]
+    conn.close()
+
+
+def test_explicit_result_wins_and_empty_turn_still_has_fallback():
+    turn = Turn(content="Earlier commentary")
+    turn.consume(
+        {
+            "role": "assistant",
+            "seq": 1,
+            "content": json.dumps(
+                {
+                    "type": "result",
+                    "result": "Final answer",
+                }
+            ),
+        }
+    )
+    assert turn.content == "Final answer"
+    empty = Turn()
+    empty.consume({"role": "assistant", "seq": 1, "content": '{"type":"result"}'})
+    assert empty.content == "Agent finished without a text reply."
+
+
 def test_callback_on_newer_turn_updates_job_owner_without_overwriting_queued_reply(tmp_path):
     store, conn, db, slack = fixture(tmp_path)
     first = status(store, "first", "build")
