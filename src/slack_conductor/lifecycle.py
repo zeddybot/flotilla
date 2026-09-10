@@ -93,7 +93,11 @@ class Turn:
             self.awaiting_callback = True
             self.phase, self.detail = "working", "checking background job results"
         elif kind == "result":
-            self.content = str(event.get("result") or "Agent finished without a text reply.")
+            # Codex emits the answer as assistant text, followed by a completion
+            # event containing only usage metadata. Keep the answer in that case.
+            self.content = str(
+                event.get("result") or self.content or "Agent finished without a text reply."
+            )
             self.is_error = bool(event.get("is_error"))
             self.result_seq = row["seq"]
             self.awaiting_callback = False
