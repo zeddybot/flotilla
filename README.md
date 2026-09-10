@@ -4,6 +4,10 @@ The planned successor is **Flotilla**, a shared Slack app with per-user clients 
 
 A personal Slack app that drives the local Conductor Mac app. Mention **@Conductor** or DM it to create a TTD workspace. Mention **@Conductor** on every channel follow-up to continue the same session; ordinary thread conversation is ignored. Direct messages do not require a mention. Agent results replace a status message in the thread. You can open and continue the same workspace in Conductor.
 
+The bot always sends the configured owner a fresh DM when a reply reaches **Done**, **Failed**, or **Needs attention** (including questions and permission/plan requests). Each DM contains the task and a link to the original reply. Completion waits for background work and final files/pages; superseded steers and historical completed replies do not generate completion alerts. Follow up in the original thread; replies to notification DMs show a link back and do not create an agent. There is no notification preference or opt-out command.
+
+Notification delivery is persisted separately from answer delivery. After a lost send response, the bridge checks DM history for the same notification before retrying. If the very first DM response is lost before the bridge knows the DM channel, sending a message to the bot supplies that identity and allows reconciliation. Slack desktop/mobile alerts still follow your Slack notification and Do Not Disturb settings.
+
 Only the configured Slack owner can issue commands. The bridge reads Conductor's SQLite database in read-only mode and uses macOS Accessibility for all actions. It never writes Conductor's database. Ordinary messages typed in Conductor are not relayed.
 
 ## Install

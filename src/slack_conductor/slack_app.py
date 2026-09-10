@@ -6,6 +6,7 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from .connection_health import ConnectionHealth
+from .notifications import Notifications
 from .poller import Poller
 from .presentation import render
 from .protocol import parse, prompt_header
@@ -18,7 +19,8 @@ class Bridge:
     def __init__(self, config, store, conductor, slack, bot_id, owner_id, team_id):
         self.config, self.store, self.conductor, self.slack = config, store, conductor, slack
         self.bot_id, self.owner_id, self.team_id = bot_id, owner_id, team_id
-        self.poller = Poller(store, conductor.db, slack)
+        self.notifications = Notifications(store, slack, owner_id)
+        self.poller = Poller(store, conductor.db, slack, notifications=self.notifications)
 
     def addressed(self, event):
         return (
@@ -27,6 +29,9 @@ class Bridge:
 
     def receive(self, body):
         event = body.get("event", {})
+        if body.get("team_id") == self.team_id and event.get("user") == self.bot_id:
+            self.notifications.acknowledge(event)
+            return
         if (
             body.get("team_id") != self.team_id
             or event.get("user") != self.owner_id
@@ -57,6 +62,20 @@ class Bridge:
         self.store.execute("UPDATE events SET state='processing' WHERE key=?", (key,))
         status_id = None
         try:
+            notice = self.notifications.reply_target(channel, thread_ts)
+            if notice:
+                self.slack.post(
+                    channel,
+                    thread_ts,
+                    render(
+                        "attention",
+                        f"Please follow up in the [original thread]({notice['permalink']}) "
+                        "and mention @Conductor there. This DM is a notification.",
+                    ),
+                    f"notice-reply:{key}",
+                )
+                self.store.execute("UPDATE events SET state='done' WHERE key=?", (key,))
+                return
             thread = self.store.thread(channel, thread_ts)
             previous = json.loads(thread["options"]) if thread else None
             text, options, command = parse(event["text"], self.bot_id, self.config, previous)
@@ -156,7 +175,8 @@ def run(config, store, conductor, creds, stop):
     def receive(body):
         bridge.receive(body)
 
-    conductor.ax.check()
+    # Output observation and DM delivery do not require a visible composer.
+    # UI selectors are validated by each send and by the explicit doctor command.
     bridge.poller.reconcile()
     handler = SocketModeHandler(app, creds["SLACK_APP_TOKEN"])
     health = ConnectionHealth(handler.client, stop)
