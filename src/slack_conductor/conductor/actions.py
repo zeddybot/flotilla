@@ -7,7 +7,7 @@ from urllib.parse import quote
 from .ax import Accessibility, attr, walk
 from .composer import prepare_prompt
 from .db import ConductorDB
-from .selectors import is_queued_prompt, model_menu_label
+from .selectors import is_queued_prompt, model_menu_label, model_picker_label
 
 EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultracode")
 
@@ -94,7 +94,7 @@ class Conductor:
         warnings = []
         model = options["model"]
         picker = self.ax.require(self.ax.composer(), role="AXPopUpButton", prefix="Change agent (")
-        if attr(picker, "AXTitle") != f"Change agent ({model})":
+        if model_picker_label(attr(picker, "AXTitle")) != model:
             self.ax.press(picker)
             time.sleep(0.15)
 
@@ -112,7 +112,7 @@ class Conductor:
             item = menu_item(model)
             if item is None:
                 # Select current model to close this menu without changing it.
-                current = str(attr(picker, "AXTitle"))[14:-1]
+                current = model_picker_label(attr(picker, "AXTitle"))
                 item = menu_item(current)
                 warnings.append(f"requested model {model} unavailable")
             if item is not None:
@@ -122,13 +122,18 @@ class Conductor:
                     lambda: self.ax.find(role="AXMenuItem") is None,
                     "Conductor model menu did not close",
                 )
+
+                def selection_settled():
+                    button = self.ax.find(
+                        self.ax.composer(), role="AXPopUpButton", prefix="Change agent ("
+                    )
+                    return (
+                        button is not None and model_picker_label(attr(button, "AXTitle")) == chosen
+                    )
+
                 try:
                     self.ax.wait(
-                        lambda: self.ax.find(
-                            self.ax.composer(),
-                            role="AXPopUpButton",
-                            title=f"Change agent ({chosen})",
-                        ),
+                        selection_settled,
                         "Conductor model selection did not settle",
                         3,
                     )
@@ -169,7 +174,7 @@ class Conductor:
             "codex_thinking_level" if actual["agent_type"] == "codex" else "claude_effort_level"
         )
         picker = self.ax.require(self.ax.composer(), role="AXPopUpButton", prefix="Change agent (")
-        label = str(attr(picker, "AXTitle"))[14:-1]
+        label = model_picker_label(attr(picker, "AXTitle"))
         if (
             label != model
             or actual_effort != options["effort"]

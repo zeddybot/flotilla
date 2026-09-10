@@ -4,7 +4,11 @@ import sqlite3
 import pytest
 
 from slack_conductor.conductor.db import ConductorDB, classify
-from slack_conductor.conductor.selectors import is_queued_prompt, model_menu_label
+from slack_conductor.conductor.selectors import (
+    is_queued_prompt,
+    model_menu_label,
+    model_picker_label,
+)
 
 
 def test_model_picker_badges_do_not_change_model_identity():
@@ -12,6 +16,25 @@ def test_model_picker_badges_do_not_change_model_identity():
     assert model_menu_label("Opus 5 NEW\n\n3") == "Opus 5"
     assert model_menu_label("Sonnet 5 1M\nSet Sonnet 5 1M as default") == "Sonnet 5 1M"
     assert model_menu_label("5.6 Sol\nSet 5.6 Sol as default") == "5.6 Sol"
+
+
+@pytest.mark.parametrize(
+    ("title", "model"),
+    [
+        ("Change agent (Fable 5.1)", "Fable 5.1"),
+        ("Change agent (Fable 5.1 · High)", "Fable 5.1"),
+        ("Change agent (GPT-6 Astra · High)", "GPT-6 Astra"),
+        ("Change agent (Sonnet 5 1M · Low)", "Sonnet 5 1M"),
+    ],
+)
+def test_model_picker_effort_does_not_change_model_identity(title, model):
+    assert model_picker_label(title) == model
+
+
+def test_model_menu_effort_preserves_context_and_new_chat_warning():
+    assert model_menu_label("Fable 5.1 High") == "Fable 5.1"
+    assert model_menu_label("Sonnet 5 1M Low") == "Sonnet 5 1M"
+    assert model_menu_label("GPT-5.6 Sol High Opens in new chat") != "GPT-5.6 Sol"
 
 
 def test_multiline_slack_prompt_matches_flattened_queue_label():

@@ -1,6 +1,17 @@
+import re
+
+
+def model_picker_label(title):
+    """Conductor 0.85 appends the effort to the selected model's button label."""
+    label = str(title or "").removeprefix("Change agent (").removesuffix(")")
+    return label.split(" · ", 1)[0]
+
+
 def model_menu_label(title):
-    """Ignore Conductor's NEW badge while preserving model/context labels."""
-    return str(title or "").split("\n", 1)[0].removesuffix(" NEW")
+    """Separate model identity from badges and effort without selecting new chats."""
+    label = str(title or "").split("\n", 1)[0]
+    label = re.sub(r" (?:low|medium|high|xhigh|max|ultracode)$", "", label, flags=re.IGNORECASE)
+    return label.removesuffix(" NEW")
 
 
 def is_queued_prompt(value, prompt):
