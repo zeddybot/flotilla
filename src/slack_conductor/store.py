@@ -21,6 +21,12 @@ CREATE TABLE IF NOT EXISTS statuses (
  result TEXT, delivered INTEGER NOT NULL DEFAULT 0,
  created REAL NOT NULL DEFAULT (unixepoch('now'))
 );
+CREATE TABLE IF NOT EXISTS notifications (
+ key TEXT PRIMARY KEY, status_id INTEGER NOT NULL, owner_id TEXT NOT NULL,
+ phase TEXT NOT NULL, title TEXT NOT NULL, detail TEXT NOT NULL,
+ state TEXT NOT NULL DEFAULT 'pending', dm_channel TEXT, dm_ts TEXT, permalink TEXT,
+ attempted_at REAL, retry_at REAL NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
@@ -40,6 +46,12 @@ class Store:
                 conn.execute(
                     "ALTER TABLE statuses ADD COLUMN attachments TEXT NOT NULL DEFAULT '{}'"
                 )
+            for name, definition in (
+                ("notice_phase", "TEXT NOT NULL DEFAULT ''"),
+                ("notice_seq", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE statuses ADD COLUMN {name} {definition}")
         path.chmod(0o600)
 
     @contextmanager
