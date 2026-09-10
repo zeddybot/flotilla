@@ -1,30 +1,40 @@
 def prepare_prompt(ax, prompt, confirm_target, read_value):
-    """Retry an empty UI write, never submission or replacement of a user's draft."""
+    """Insert real editor input once, preserving unrelated drafts and target guards."""
     expected = prompt.rstrip("\n")
 
     def editor():
         confirm_target()
         return ax.require(ax.composer(), role="AXTextArea")
 
-    for attempt in range(3):
-        current = editor()
-        draft = read_value(current)
-        if (
-            draft.strip()
-            and draft.rstrip("\n") != expected
-            and not (attempt == 0 and draft.startswith("Slack workspace "))
-        ):
-            raise RuntimeError("Conductor composer has an unsent draft; clear it before retrying")
-        if draft.rstrip("\n") != expected:
-            ax.set(current, "AXValue", prompt)
-        try:
-            # React can replace the text area during navigation or model selection.
-            # Read the current editor instead of polling a stale AX element.
-            ax.wait(
-                lambda: read_value(editor()).rstrip("\n") == expected,
-                "Conductor composer value did not match prompt",
-            )
-            return
-        except RuntimeError:
-            if attempt == 2:
-                raise
+    current = editor()
+    draft = read_value(current)
+    if draft.rstrip("\n") == expected:
+        return
+    if draft.strip() and not draft.startswith("Slack workspace "):
+        raise RuntimeError("Conductor composer has an unsent draft; clear it before retrying")
+
+    def unchanged():
+        fresh = editor()
+        if fresh != current or read_value(fresh) != draft:
+            raise RuntimeError("Conductor composer changed while preparing text; action stopped")
+        return fresh
+
+    # AXValue can report success without producing an input event in the web editor.
+    # Select only the verified draft, then insert text through the native input path.
+    ax.set(current, "AXFocused", True)
+    ax.wait(lambda: ax.focused(unchanged()), "Conductor composer could not be focused")
+    selected = draft.rstrip("\n")  # WebKit adds a synthetic trailing newline to AXValue.
+    ax.select_text(unchanged(), len(draft.encode("utf-16-le")) // 2)
+    ax.wait(
+        lambda: ax.selected_text(unchanged()).rstrip("\n") == selected,
+        "Conductor composer selection was not confirmed",
+    )
+    if not ax.focused(unchanged()) or ax.selected_text(current).rstrip("\n") != selected:
+        raise RuntimeError("Conductor composer focus or selection changed; action stopped")
+    ax.type_text(prompt)
+    # Input might already have arrived even if this confirmation times out. Never
+    # replay native keystrokes automatically; the caller also submits only once.
+    ax.wait(
+        lambda: read_value(editor()).rstrip("\n") == expected,
+        "Conductor composer value did not match prompt",
+    )

@@ -167,6 +167,33 @@ class Accessibility:
             Quartz.CGEventSetFlags(event, Quartz.kCGEventFlagMaskCommand)
             Quartz.CGEventPostToPid(self.pid, event)
 
+    @staticmethod
+    def focused(editor):
+        return bool(attr(editor, "AXFocused"))
+
+    @staticmethod
+    def selected_text(editor):
+        return str(attr(editor, "AXSelectedText") or "")
+
+    def select_text(self, editor, length):
+        self.set(
+            editor,
+            "AXSelectedTextRange",
+            AX.AXValueCreate(AX.kAXValueCFRangeType, (0, length)),
+        )
+
+    def type_text(self, text):
+        # A Unicode text event carries embedded newlines without pressing Return,
+        # and targets Conductor directly without touching the system clipboard.
+        for down in (True, False):
+            event = Quartz.CGEventCreateKeyboardEvent(None, 0, down)
+            Quartz.CGEventSetFlags(event, 0)
+            if down:
+                Quartz.CGEventKeyboardSetUnicodeString(
+                    event, len(text.encode("utf-16-le")) // 2, text
+                )
+            Quartz.CGEventPostToPid(self.pid, event)
+
     def composer(self):
         return self.require(role="AXGroup", description="composer")
 
