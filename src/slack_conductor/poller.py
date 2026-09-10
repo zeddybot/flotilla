@@ -11,12 +11,13 @@ log = logging.getLogger(__name__)
 
 
 class Poller:
-    def __init__(self, store, db, slack, *, clock=time.time, settle_seconds=2):
+    def __init__(self, store, db, slack, *, clock=time.time, settle_seconds=2, notifications=None):
         self.store, self.db, self.slack = store, db, slack
         self.idle_since = {}
         self.last_text = {}
         self.clock, self.settle_seconds = clock, settle_seconds
         self.uploads = Uploads(store, slack, clock=clock)
+        self.notifications = notifications
 
     def finish(self, status, text, phase="done", detail=""):
         turn = Turn.load(status["tracking"])
@@ -63,6 +64,8 @@ class Poller:
                     **({"images": images} if images else {}),
                 )
             self.store.update(status["id"], delivered=index + 1)
+        if self.notifications:
+            self.notifications.observe(status, phase, turn.detail)
         self.store.update(status["id"], state="complete")
         self.uploads.cleanup(self.store.status(status["id"]))
         self.idle_since.pop(status["id"], None)
@@ -148,6 +151,8 @@ class Poller:
                 self.poll(status)
             except Exception:
                 log.exception("Polling failed for status %s", status["id"])
+        if self.notifications:
+            self.notifications.tick()
 
     def poll(self, status):
         if status["discard_ts"] != "[]":
@@ -197,6 +202,19 @@ class Poller:
             ready = turn.ready(
                 now, session["status"] == "idle" or bool(later_turn), self.settle_seconds
             )
+            blocked = {
+                "needs_user_input": "answer requested in Conductor",
+                "needs_user_permission": "permission requested in Conductor",
+                "needs_plan_response": "plan approval requested in Conductor",
+            }
+            if session["status"] in blocked and not turn.result_seq:
+                current = self.db.query(
+                    "SELECT turn_id FROM session_messages WHERE session_id=? AND role='user' "
+                    "AND sent_at IS NOT NULL AND cancelled_at IS NULL ORDER BY rowid DESC LIMIT 1",
+                    (status["session_id"],),
+                )
+                if current and current[0]["turn_id"] in {status["turn_id"], turn.callback_turn_id}:
+                    turn.phase, turn.detail = "attention", blocked[session["status"]]
             status["latest"] = (
                 f"waiting for {len(turn.tasks)} background job(s)"
                 if turn.tasks and turn.result_seq
@@ -251,3 +269,5 @@ class Poller:
             self.slack.edit(status, text[:3900])
             self.last_text[status["id"]] = text
             self.store.update(status["id"], last_edit=now)
+        if self.notifications and status["state"] == "active":
+            self.notifications.observe(status, turn.phase, turn.detail)

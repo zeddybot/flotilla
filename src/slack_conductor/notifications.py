@@ -47,6 +47,47 @@ class Notifications:
         )
         row.update(values)
 
+    def reply_target(self, channel, thread_ts):
+        rows = self.store.rows(
+            "SELECT * FROM notifications WHERE dm_channel=? AND dm_ts=? AND owner_id=?",
+            (channel, thread_ts, self.owner_id),
+        )
+        if rows:
+            return rows[0]
+        # A user can reply after Slack accepted a DM but before we saved its ts.
+        pending = self.store.rows(
+            "SELECT * FROM notifications WHERE state='sending' AND owner_id=?",
+            (self.owner_id,),
+        )
+        if channel.startswith("D") and pending:
+            response = self.slack.call(
+                "conversations_history",
+                channel=channel,
+                oldest=thread_ts,
+                latest=thread_ts,
+                inclusive=True,
+                limit=1,
+            )
+            for message in response["messages"]:
+                ids = {b.get("block_id") for b in message.get("blocks", [])}
+                for row in pending:
+                    if f"notice:{row['key']}" in ids:
+                        self.save(row, state="sent", dm_channel=channel, dm_ts=thread_ts)
+                        return row
+        return None
+
+    def acknowledge(self, event):
+        """Slack's own bot-message echo can recover a lost first-DM response."""
+        if not str(event.get("channel", "")).startswith("D") or not event.get("ts"):
+            return
+        ids = {b.get("block_id") for b in event.get("blocks", [])}
+        for row in self.store.rows(
+            "SELECT * FROM notifications WHERE state='sending' AND owner_id=?",
+            (self.owner_id,),
+        ):
+            if f"notice:{row['key']}" in ids:
+                self.save(row, state="sent", dm_channel=event["channel"], dm_ts=event["ts"])
+
     def known_dm(self, owner):
         rows = self.store.rows(
             "SELECT dm_channel AS channel FROM notifications WHERE owner_id=? "
