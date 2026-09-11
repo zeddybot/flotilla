@@ -1,5 +1,6 @@
 """Startup failures release acquired resources without launching real agents."""
 
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -7,14 +8,17 @@ import pytest
 
 from slack_conductor import slack_app
 from slack_conductor.config import Config
+from slack_conductor.connection_health import ConnectionHealth
 from slack_conductor.store import Store
 
 
-@pytest.mark.parametrize("failure", ["reconcile", "socket_construct", "connect", "none"])
+@pytest.mark.parametrize("failure", ["reconcile", "socket_construct", "connect", "health", "none"])
 def test_acquired_resources_close_even_when_startup_fails(tmp_path, monkeypatch, failure):
     store = Store(tmp_path / "bridge.sqlite")
     closed = []
     client = SimpleNamespace(
+        current_session=None,
+        on_error_listeners=[],
         auth_test=lambda: {"team_id": "T", "user_id": "B", "team": "test"},
         users_info=lambda **_: {"user": {}},
     )
@@ -25,6 +29,10 @@ def test_acquired_resources_close_even_when_startup_fails(tmp_path, monkeypatch,
     )
 
     def attempt(stage):
+        if failure == "health" and stage == "connect":
+            for _ in range(5):
+                for listener in client.on_error_listeners:
+                    listener(BrokenPipeError())
         if failure == stage:
             raise RuntimeError(stage)
 
@@ -37,14 +45,25 @@ def test_acquired_resources_close_even_when_startup_fails(tmp_path, monkeypatch,
         )
 
     monkeypatch.setattr(slack_app, "SocketModeHandler", handler)
-    monkeypatch.setattr(
-        slack_app,
-        "ConnectionHealth",
-        lambda *_: SimpleNamespace(
-            start=lambda: None, close=lambda: closed.append("health"), failed=False
-        ),
+
+    def health(*args):
+        result = ConnectionHealth(*args)
+        close = result.close
+
+        def cleanup():
+            close()
+            closed.append("health")
+
+        result.close = cleanup
+        return result
+
+    monkeypatch.setattr(slack_app, "ConnectionHealth", health)
+    conductor = SimpleNamespace(
+        db=None, start=Mock(), ready=Mock(), close=lambda: closed.append("native")
     )
-    conductor = SimpleNamespace(db=None, start=Mock(), close=lambda: closed.append("native"))
+    stop = threading.Event()
+    if failure != "health":
+        stop.set()
     args = (
         Config(),
         store,
@@ -55,10 +74,14 @@ def test_acquired_resources_close_even_when_startup_fails(tmp_path, monkeypatch,
             "SLACK_TEAM_ID": "T",
             "OWNER_SLACK_USER_ID": "U",
         },
-        SimpleNamespace(is_set=lambda: True),
+        stop,
     )
     if failure == "none":
         slack_app.run(*args)
+    elif failure == "health":
+        with pytest.raises(ConnectionError, match="Socket Mode stalled"):
+            slack_app.run(*args)
+        conductor.ready.assert_not_called()
     else:
         with pytest.raises(RuntimeError, match=failure):
             slack_app.run(*args)

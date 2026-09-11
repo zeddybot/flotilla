@@ -222,6 +222,9 @@ def run(config, store, conductor, creds, stop):
             creds["OWNER_SLACK_USER_ID"],
         )
         while not stop.is_set():
+            health.check()
+            if stop.is_set():
+                break
             started = time.monotonic()
             try:
                 online = conductor.ready()
