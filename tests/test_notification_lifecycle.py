@@ -2,8 +2,6 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from test_bridge import fixture, message, result, status
-from test_lifecycle import event
 
 from slack_conductor import slack_app
 from slack_conductor.config import Config
@@ -11,6 +9,7 @@ from slack_conductor.notifications import Notifications
 from slack_conductor.poller import Poller
 from slack_conductor.slack_app import Bridge
 from slack_conductor.store import Store
+from tests.support import event, fixture, message, result, status
 
 
 def attach(store, slack):

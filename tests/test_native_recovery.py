@@ -1,12 +1,11 @@
 from types import SimpleNamespace
 
-from test_bridge import fixture, message, result, status
-
 from slack_conductor.conductor.journal import Unconfirmed
 from slack_conductor.config import Config
 from slack_conductor.lifecycle import Turn
 from slack_conductor.poller import Poller
 from slack_conductor.slack_app import Bridge
+from tests.support import fixture, message, result, status
 
 
 def runtime(epoch, state, tasks=()):
