@@ -102,11 +102,27 @@ def test_recovered_creation_uses_original_workspace_and_session(tmp_path):
     assert second["active_session_id"] == "created"
 
 
-@pytest.mark.parametrize("label", list(Config().models.values()))
-def test_all_configured_models_have_native_configuration(label):
-    config, warning = configuration({"model": label, "effort": "high", "fast": False}, "Fable 5.1")
-    assert config["model"] and not warning
-    assert config["agent"] in {"claude", "codex"}
+@pytest.mark.parametrize(
+    ("alias", "expected", "agent"),
+    [
+        ("fable", "fable-5-1", "claude"),
+        ("opus", "opus-5-1m", "claude"),
+        ("sonnet", "sonnet-5-1m", "claude"),
+        ("haiku", "haiku-4-5", "claude"),
+        ("astra", "gpt-6-astra", "codex"),
+        ("sol", "gpt-5.6-sol", "codex"),
+        ("terra", "gpt-5.6-terra", "codex"),
+        ("luna", "gpt-5.6-luna", "codex"),
+    ],
+)
+def test_configured_aliases_select_the_expected_engine_and_model(alias, expected, agent):
+    from slack_conductor.protocol import parse
+
+    _, options, _ = parse(f"[{alias}] hello", "bot", Config())
+    config, warning = configuration(options, "Fable 5.1")
+    assert not warning
+    assert config["model"] == expected
+    assert config["agent"] == agent
 
 
 def test_unsupported_settings_keep_default_model_fallback():
@@ -120,3 +136,20 @@ def test_unsupported_settings_keep_default_model_fallback():
         "fastMode": False,
     }
     assert "using Sonnet" in warning and "using high" in warning and "standard speed" in warning
+
+
+def test_followup_cannot_reconfigure_session_while_first_prompt_is_in_outbox(tmp_path):
+    adapter, path = fixture(tmp_path)
+    with sqlite3.connect(path) as connection:
+        connection.execute("INSERT INTO session_messages_outbox VALUES ('initial', 's')")
+    calls = []
+    adapter.transport.call = lambda body, **_: calls.append(body)
+    note = adapter.send(
+        "w",
+        "s",
+        "follow-up",
+        {"model": "Fable 5.1", "effort": "high", "fast": False, "send_mode": "queue"},
+    )
+    assert [call["op"] for call in calls] == ["send"]
+    assert calls[0]["mode"] == "queue"
+    assert "session model remains gpt-5.6-luna" in note
