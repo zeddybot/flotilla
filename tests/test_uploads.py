@@ -5,11 +5,11 @@ from slack_sdk.errors import SlackApiError
 
 from slack_conductor.store import Store
 from slack_conductor.uploads import Uploads
-from tests.support import fixture, status
+from tests.support import status
 
 
-def test_snapshot_and_finalize_recovery_reuse_the_same_file_id(tmp_path):
-    store, conn, _, slack = fixture(tmp_path)
+def test_snapshot_and_finalize_recovery_reuse_the_same_file_id(tmp_path, bridge_state):
+    store, _, _, slack = bridge_state
     source = tmp_path / "report.csv"
     source.write_text("original")
     sid = status(store, "request", "report")
@@ -59,11 +59,10 @@ def test_snapshot_and_finalize_recovery_reuse_the_same_file_id(tmp_path):
     assert calls.count("files_getUploadURLExternal") == 1
     uploads.cleanup(store.status(sid))
     assert not Path(plan["files"][0]["snapshot"]).exists()
-    conn.close()
 
 
-def test_missing_and_nonregular_files_preserve_answer_without_uploads(tmp_path):
-    store, conn, _, slack = fixture(tmp_path)
+def test_missing_and_nonregular_files_preserve_answer_without_uploads(tmp_path, bridge_state):
+    store, _, _, slack = bridge_state
     sid = status(store, "request", "report")
     store.update(sid, result="Answer. [missing](gone.pdf) [folder](.) [source](app.py:42)")
     uploads = Uploads(store, slack, clock=lambda: 0)
@@ -72,11 +71,10 @@ def test_missing_and_nonregular_files_preserve_answer_without_uploads(tmp_path):
     text, _, ids = uploads.result(plan)
     assert text.startswith("Answer.") and text.count("file unavailable") == 2
     assert "[source](app.py:42)" in text and not ids
-    conn.close()
 
 
-def test_upload_failure_is_bounded_and_does_not_hide_the_answer(tmp_path):
-    store, conn, _, slack = fixture(tmp_path)
+def test_upload_failure_is_bounded_and_does_not_hide_the_answer(tmp_path, bridge_state):
+    store, _, _, slack = bridge_state
     (tmp_path / "a.txt").write_text("hello")
     sid = status(store, "request", "report")
     store.update(sid, result="Answer. [file](a.txt)")
@@ -98,11 +96,10 @@ def test_upload_failure_is_bounded_and_does_not_hide_the_answer(tmp_path):
     assert uploads.step(store.status(sid), plan)
     assert "Answer." in uploads.result(plan)[0]
     assert "upload failed" in uploads.result(plan)[0]
-    conn.close()
 
 
-def test_retry_finalization_when_slack_reports_unfinalized_file_as_deleted(tmp_path):
-    store, conn, _, slack = fixture(tmp_path)
+def test_retry_finalization_when_slack_reports_unfinalized_file_as_deleted(bridge_state):
+    store, _, _, slack = bridge_state
     sid = status(store, "request", "report")
     row = store.status(sid)
     item = {"name": "a.txt", "file_id": "F1", "phase": "confirm"}
@@ -127,4 +124,3 @@ def test_retry_finalization_when_slack_reports_unfinalized_file_as_deleted(tmp_p
     uploads.step(row, plan)
     assert uploads.step(row, plan)
     assert calls == ["files_info", "files_completeUploadExternal", "files_info"]
-    conn.close()

@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import closing
 from types import SimpleNamespace
 
 import pytest
@@ -10,7 +11,7 @@ from slack_conductor.config import Config
 
 def fixture(tmp_path):
     path = tmp_path / "conductor.db"
-    with sqlite3.connect(path) as c:
+    with closing(sqlite3.connect(path)) as c, c:
         c.executescript("""
             CREATE TABLE repos(id,root_path);
             CREATE TABLE workspaces(id,repository_id,workspace_path,state,active_session_id);
@@ -63,7 +64,7 @@ def test_send_reuses_native_identity_after_ack_loss(tmp_path):
     def call(body, **kwargs):
         calls.append(body)
         if body["op"] == "send":
-            with sqlite3.connect(path) as c:
+            with closing(sqlite3.connect(path)) as c, c:
                 c.execute(
                     "INSERT INTO session_messages VALUES (?,?,?,?)",
                     (body["message_id"], "s", "user", body["prompt"]),
@@ -83,7 +84,7 @@ def test_recovered_creation_uses_original_workspace_and_session(tmp_path):
 
     def call(body, **kwargs):
         wid = body["wid"]
-        with sqlite3.connect(path) as c:
+        with closing(sqlite3.connect(path)) as c, c:
             if not c.execute("SELECT 1 FROM workspaces WHERE id=?", (wid,)).fetchone():
                 created.append(wid)
                 c.execute(
@@ -140,7 +141,7 @@ def test_unsupported_settings_keep_default_model_fallback():
 
 def test_followup_cannot_reconfigure_session_while_first_prompt_is_in_outbox(tmp_path):
     adapter, path = fixture(tmp_path)
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         connection.execute("INSERT INTO session_messages_outbox VALUES ('initial', 's')")
     calls = []
     adapter.transport.call = lambda body, **_: calls.append(body)

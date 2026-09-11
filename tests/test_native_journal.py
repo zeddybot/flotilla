@@ -107,7 +107,8 @@ def test_transport_rejects_stale_attachment_and_unknown_pause_target(tmp_path):
             )
             with pytest.raises(HTTPError) as error:
                 urlopen(req)
-            assert error.value.code == code
+            with error.value as response:
+                assert response.code == code
         assert not transport.online()
     finally:
         transport.close()
@@ -126,7 +127,8 @@ def test_bootstrap_module_is_scoped_to_current_attachment(tmp_path):
         transport.attach("new")
         with pytest.raises(HTTPError) as error:
             urlopen(url)
-        assert error.value.code == 409
+        with error.value as response:
+            assert response.code == 409
         assert transport.bootstrap == ""
     finally:
         transport.close()

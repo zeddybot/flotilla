@@ -9,7 +9,7 @@ from slack_conductor.notifications import Notifications
 from slack_conductor.poller import Poller
 from slack_conductor.slack_app import Bridge
 from slack_conductor.store import Store
-from tests.support import event, fixture, message, result, status
+from tests.support import event, message, result, status
 
 
 def attach(store, slack):
@@ -28,8 +28,8 @@ def attach(store, slack):
     return Notifications(store, slack, "U1"), sent
 
 
-def test_background_steer_notifies_only_replacement_and_queue_notifies_separately(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_background_steer_notifies_only_replacement_and_queue_notifies_separately(bridge_state):
+    store, conn, db, slack = bridge_state
     notices, sent = attach(store, slack)
     first = status(store, "first", "watch")
     message(conn, "user", "watch", "turn")
@@ -52,14 +52,13 @@ def test_background_steer_notifies_only_replacement_and_queue_notifies_separatel
     assert len(sent) == 2 and f"status-{third}" in sent[-1]["text"]
     Poller(Store(store.path), db, slack, notifications=notices).reconcile()
     assert len(sent) == 2
-    conn.close()
 
 
 @pytest.mark.parametrize(
     "native", ["needs_user_input", "needs_user_permission", "needs_plan_response"]
 )
-def test_blocked_agent_notifies_once_then_failure_notifies(tmp_path, native):
-    store, conn, db, slack = fixture(tmp_path)
+def test_blocked_agent_notifies_once_then_failure_notifies(bridge_state, native):
+    store, conn, db, slack = bridge_state
     notices, sent = attach(store, slack)
     status(store, "request", "task")
     message(conn, "user", "task", "turn")
@@ -79,11 +78,10 @@ def test_blocked_agent_notifies_once_then_failure_notifies(tmp_path, native):
     )
     poller.tick()
     assert len(sent) == 2 and "Failed" in sent[-1]["text"]
-    conn.close()
 
 
-def test_notification_reply_redirects_without_creating_agent(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_notification_reply_redirects_without_creating_agent(bridge_state):
+    store, _, db, slack = bridge_state
     notices, sent = attach(store, slack)
     sid = status(store, "request", "task")
     store.update(sid, state="complete")
@@ -105,11 +103,10 @@ def test_notification_reply_redirects_without_creating_agent(tmp_path):
     assert store.thread("D1", "dm-1") is None
     assert "original thread" in slack.posts[-1][2]
     assert len(sent) == 1
-    conn.close()
 
 
-def test_only_our_bot_echo_confirms_ambiguous_notification(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_only_our_bot_echo_confirms_ambiguous_notification(bridge_state):
+    store, _, db, slack = bridge_state
     notices, sent = attach(store, slack)
     sid = status(store, "request", "task")
     notices.observe(store.status(sid), "attention")
@@ -129,11 +126,10 @@ def test_only_our_bot_echo_confirms_ambiguous_notification(tmp_path):
     bridge.receive({"team_id": "T1", "event": echo})
     assert notices.reply_target("D1", "dm-1")["state"] == "sent"
     assert not sent
-    conn.close()
 
 
-def test_notification_waits_until_all_final_pages_delivered(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_notification_waits_until_all_final_pages_delivered(bridge_state):
+    store, _, db, slack = bridge_state
     notices, sent = attach(store, slack)
     sid = status(store, "request", "task")
     poller = Poller(store, db, slack, notifications=notices)
@@ -146,11 +142,10 @@ def test_notification_waits_until_all_final_pages_delivered(tmp_path):
     slack.post = post
     poller.tick()
     assert store.status(sid)["state"] == "complete" and len(sent) == 1
-    conn.close()
 
 
-def test_startup_delivers_pending_dm_without_dispatching_agent_work(tmp_path, monkeypatch):
-    store, conn, db, slack = fixture(tmp_path)
+def test_startup_delivers_pending_dm_without_dispatching_agent_work(bridge_state, monkeypatch):
+    store, _, db, slack = bridge_state
     notices, sent = attach(store, slack)
     sid = status(store, "request", "task")
     store.update(sid, state="complete")
@@ -193,4 +188,3 @@ def test_startup_delivers_pending_dm_without_dispatching_agent_work(tmp_path, mo
         SimpleNamespace(is_set=lambda: True),
     )
     assert len(sent) == 1
-    conn.close()

@@ -1,14 +1,10 @@
 """Shared bridge test doubles and native-message builders.
 
 Keep test scenarios in their own modules; this module supplies only the common
-in-memory Slack recorder and disposable SQLite setup used by those scenarios.
+in-memory Slack recorder and message builders used by those scenarios.
 """
 
 import json
-import sqlite3
-
-from slack_conductor.conductor.db import ConductorDB
-from slack_conductor.store import Store
 
 
 class Slack:
@@ -24,22 +20,6 @@ class Slack:
 
     def delete(self, status):
         self.deletes.append(status["status_ts"])
-
-
-def fixture(tmp_path):
-    store = Store(tmp_path / "bridge.sqlite")
-    path = tmp_path / "conductor.db"
-    conn = sqlite3.connect(path)
-    conn.executescript("""
-      CREATE TABLE workspaces(id,state);
-      INSERT INTO workspaces VALUES ('w','ready');
-      CREATE TABLE sessions(id,status);
-      INSERT INTO sessions VALUES ('s','idle');
-      CREATE TABLE session_messages(id,session_id,role,content,turn_id,sent_at,cancelled_at,created_at);
-    """)
-    conn.commit()
-    db, slack = ConductorDB(path), Slack()
-    return store, conn, db, slack
 
 
 def status(store, key, prompt, cursor=0, *, send_mode="steer"):

@@ -5,15 +5,15 @@ import pytest
 from slack_conductor.lifecycle import Turn
 from slack_conductor.poller import Poller
 from slack_conductor.store import Store
-from tests.support import event, fixture, message, result, status
+from tests.support import event, message, result, status
 
 
 @pytest.mark.parametrize("polled_job", [False, True])
 @pytest.mark.parametrize("callback_pending", [False, True])
 def test_background_steer_on_new_turn_moves_job_and_answer_below_followup(
-    tmp_path, polled_job, callback_pending
+    bridge_state, polled_job, callback_pending
 ):
-    store, conn, db, slack = fixture(tmp_path)
+    store, conn, db, slack = bridge_state
     first = status(store, "first", "watch deploy")
     message(conn, "user", "watch deploy", "turn")
     poller = Poller(store, db, slack, settle_seconds=0)
@@ -43,14 +43,13 @@ def test_background_steer_on_new_turn_moves_job_and_answer_below_followup(
     assert store.status(second)["result"] == "Stopped the staging deploy watch."
     assert not Turn.load(store.status(second)["tracking"]).ignore_callback
     assert not any("Stopped the staging" in text for ts, text in slack.edits if ts == "status-1")
-    conn.close()
 
 
 @pytest.mark.parametrize("completed_before_followup", [False, True])
 def test_background_handoff_uses_state_at_each_user_message_when_polling_catches_up(
-    tmp_path, completed_before_followup
+    bridge_state, completed_before_followup
 ):
-    store, conn, db, slack = fixture(tmp_path)
+    store, conn, db, slack = bridge_state
     first = status(store, "first", "watch deploy")
     message(conn, "user", "watch deploy", "turn")
     event(conn, "task_started", task_id="deploy")
@@ -82,11 +81,10 @@ def test_background_handoff_uses_state_at_each_user_message_when_polling_catches
     assert store.status(second)["result"] == "Stopped watching."
     assert store.status(third)["state"] == "active"
     assert Turn.load(store.status(third)["tracking"]).tasks == {"new-deploy": "background job"}
-    conn.close()
 
 
-def test_waiting_queue_does_not_hide_running_job_from_later_steer(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_waiting_queue_does_not_hide_running_job_from_later_steer(bridge_state):
+    store, conn, db, slack = bridge_state
     first = status(store, "first", "watch deploy")
     message(conn, "user", "watch deploy", "turn")
     event(conn, "task_started", task_id="deploy")
@@ -114,11 +112,10 @@ def test_waiting_queue_does_not_hide_running_job_from_later_steer(tmp_path):
     assert store.status(queued)["state"] == "complete"
     assert store.status(queued)["result"] == "Queued task done."
     assert slack.deletes == ["status-1"]
-    conn.close()
 
 
-def test_preview_wait_resumes_after_restart_and_only_finishes_after_callback(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_preview_wait_resumes_after_restart_and_only_finishes_after_callback(bridge_state):
+    store, conn, db, slack = bridge_state
     sid = status(store, "request", "fix bug")
     message(conn, "user", "fix bug", "turn")
     event(conn, "task_started", task_id="deploy", description="preview deployment")
@@ -144,11 +141,10 @@ def test_preview_wait_resumes_after_restart_and_only_finishes_after_callback(tmp
     poller.tick()
     assert store.status(sid)["state"] == "complete"
     assert store.status(sid)["result"] == "Fixed and preview verified."
-    conn.close()
 
 
-def test_jobs_are_independent_and_duplicate_notifications_cannot_reopen_them(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_jobs_are_independent_and_duplicate_notifications_cannot_reopen_them(bridge_state):
+    store, conn, db, slack = bridge_state
     sid = status(store, "request", "task")
     message(conn, "user", "task", "turn")
     for task in ("one", "two"):
@@ -166,11 +162,10 @@ def test_jobs_are_independent_and_duplicate_notifications_cannot_reopen_them(tmp
     result(conn, "Done after cancellation.", "turn")
     poller.tick()
     assert store.status(sid)["state"] == "complete"
-    conn.close()
 
 
-def test_active_old_runtime_cursor_rebuilds_outstanding_jobs(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_active_old_runtime_cursor_rebuilds_outstanding_jobs(bridge_state):
+    store, conn, db, slack = bridge_state
     sid = status(store, "request", "task")
     message(conn, "user", "task", "turn")
     event(conn, "task_started", task_id="deploy")
@@ -179,7 +174,6 @@ def test_active_old_runtime_cursor_rebuilds_outstanding_jobs(tmp_path):
     Poller(store, db, slack, settle_seconds=0).reconcile()
     assert store.status(sid)["state"] == "active"
     assert "deploy" in Turn.load(store.status(sid)["tracking"]).tasks
-    conn.close()
 
 
 def test_foreign_and_nested_events_do_not_change_lifecycle():
@@ -199,8 +193,8 @@ def test_foreign_and_nested_events_do_not_change_lifecycle():
 
 
 @pytest.mark.parametrize("completion", [{}, {"result": None}, {"result": ""}])
-def test_codex_completion_preserves_final_text_after_restart_and_steer(tmp_path, completion):
-    store, conn, db, slack = fixture(tmp_path)
+def test_codex_completion_preserves_final_text_after_restart_and_steer(bridge_state, completion):
+    store, conn, db, slack = bridge_state
     first = status(store, "first", "investigate")
     message(conn, "user", "investigate", "turn")
     poller = Poller(store, db, slack, settle_seconds=0)
@@ -239,7 +233,6 @@ def test_codex_completion_preserves_final_text_after_restart_and_steer(tmp_path,
     assert store.status(second)["result"] == final
     assert slack.edits[-1][0] == f"status-{second}"
     assert final in slack.edits[-1][1]
-    conn.close()
 
 
 def test_explicit_result_wins_and_empty_turn_still_has_fallback():
@@ -262,8 +255,8 @@ def test_explicit_result_wins_and_empty_turn_still_has_fallback():
     assert empty.content == "Agent finished without a text reply."
 
 
-def test_callback_on_newer_turn_updates_job_owner_without_overwriting_queued_reply(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_callback_on_newer_turn_updates_job_owner_without_overwriting_queued_reply(bridge_state):
+    store, conn, db, slack = bridge_state
     first = status(store, "first", "build")
     message(conn, "user", "build", "turn")
     event(conn, "task_started", task_id="build")
@@ -303,11 +296,10 @@ def test_callback_on_newer_turn_updates_job_owner_without_overwriting_queued_rep
     assert store.status(first)["state"] == store.status(second)["state"] == "complete"
     assert store.status(first)["result"] == "Build verified; no work remaining."
     assert store.status(second)["result"] == "Queued request answer."
-    conn.close()
 
 
-def test_pending_plan_remains_attention_when_reload_resets_native_status(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_pending_plan_remains_attention_when_reload_resets_native_status(bridge_state):
+    store, conn, db, slack = bridge_state
     sid = status(store, "plan", "prepare a plan")
     message(conn, "user", "prepare a plan", "plan-turn")
     message(

@@ -39,6 +39,8 @@ observable behavior while allowing those components to move.
 another. Disposable SQLite databases test real persistence. Injected clocks and
 recording Slack/native boundaries avoid live accounts and production sessions.
 The native HTTP tests use ephemeral loopback ports and close their servers.
+Yield fixtures close shared SQLite connections, and resource/unraisable warnings
+fail tests rather than hiding leaked database or socket handles.
 
 Run only relevant tests locally, for example:
 

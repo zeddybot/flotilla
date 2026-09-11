@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -48,11 +49,11 @@ def test_all_content_blocks_are_classified():
 
 def test_read_only_and_timestamp_collisions(tmp_path):
     path = tmp_path / "conductor.db"
-    conn = sqlite3.connect(path)
-    conn.execute("CREATE TABLE session_messages(session_id, content, created_at)")
-    conn.executemany("INSERT INTO session_messages VALUES ('s',?,'same-time')", [("a",), ("b",)])
-    conn.commit()
-    conn.close()
+    with closing(sqlite3.connect(path)) as conn, conn:
+        conn.execute("CREATE TABLE session_messages(session_id, content, created_at)")
+        conn.executemany(
+            "INSERT INTO session_messages VALUES ('s',?,'same-time')", [("a",), ("b",)]
+        )
     db = ConductorDB(path)
     assert [r["content"] for r in db.messages("s", 1)] == ["b"]
     with pytest.raises(sqlite3.OperationalError, match="readonly"):

@@ -6,11 +6,11 @@ from slack_conductor.poller import Poller
 from slack_conductor.presentation import blocks, pages
 from slack_conductor.slack_io import SlackIO
 from slack_conductor.store import Store
-from tests.support import event, fixture, message, result, status
+from tests.support import event, message, result, status
 
 
-def test_final_steered_reply_owns_uploads_and_restart_does_not_repeat_them(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_final_steered_reply_owns_uploads_and_restart_does_not_repeat_them(tmp_path, bridge_state):
+    store, conn, db, slack = bridge_state
     conn.execute("ALTER TABLE workspaces ADD COLUMN workspace_path")
     conn.execute("UPDATE workspaces SET workspace_path=?", (str(tmp_path),))
     conn.commit()
@@ -61,7 +61,6 @@ def test_final_steered_reply_owns_uploads_and_restart_does_not_repeat_them(tmp_p
     )
     assert store.status(second)["state"] == "complete"
     assert store.status(first)["attachments"] == "{}"
-    conn.close()
 
 
 def test_slack_edit_attaches_files_and_renders_images_between_markdown():

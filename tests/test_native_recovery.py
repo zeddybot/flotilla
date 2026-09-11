@@ -5,7 +5,7 @@ from slack_conductor.config import Config
 from slack_conductor.lifecycle import Turn
 from slack_conductor.poller import Poller
 from slack_conductor.slack_app import Bridge
-from tests.support import fixture, message, result, status
+from tests.support import message, result, status
 
 
 def runtime(epoch, state, tasks=()):
@@ -23,8 +23,8 @@ def test_helper_restart_retains_background_tasks_and_old_result():
     assert not turn.interrupted
 
 
-def test_app_restart_clears_killed_tasks_but_waits_for_running_agent(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_app_restart_clears_killed_tasks_but_waits_for_running_agent(bridge_state):
+    store, conn, db, slack = bridge_state
     sid = status(store, "crash", "watch deploy")
     message(conn, "user", "watch deploy", "turn")
     turn = Turn(
@@ -49,8 +49,8 @@ def test_app_restart_clears_killed_tasks_but_waits_for_running_agent(tmp_path):
     assert "Done" in slack.edits[-1][1]
 
 
-def test_killed_job_without_callback_settles_to_attention(tmp_path):
-    store, _, db, slack = fixture(tmp_path)
+def test_killed_job_without_callback_settles_to_attention(bridge_state):
+    store, _, db, slack = bridge_state
     sid = status(store, "crash", "watch")
     store.update(
         sid,
@@ -69,8 +69,8 @@ def test_killed_job_without_callback_settles_to_attention(tmp_path):
     assert "no longer running" in slack.edits[-1][1]
 
 
-def test_missing_runtime_never_concludes_background_job_is_dead(tmp_path):
-    store, _, db, slack = fixture(tmp_path)
+def test_missing_runtime_never_concludes_background_job_is_dead(bridge_state):
+    store, _, db, slack = bridge_state
     sid = status(store, "offline", "watch")
     store.update(
         sid,
@@ -86,8 +86,8 @@ def test_missing_runtime_never_concludes_background_job_is_dead(tmp_path):
     assert "Reconnecting" in slack.edits[-1][1]
 
 
-def test_creation_crash_reuses_slack_status_and_original_creation_intent(tmp_path):
-    store, _, db, slack = fixture(tmp_path)
+def test_creation_crash_reuses_slack_status_and_original_creation_intent(bridge_state):
+    store, _, db, slack = bridge_state
     attempts, sends = [], []
 
     def create(key):
@@ -121,10 +121,10 @@ def test_creation_crash_reuses_slack_status_and_original_creation_intent(tmp_pat
     assert not store.next_event()
 
 
-def test_restored_foreign_callback_does_not_hide_followup_result(tmp_path):
+def test_restored_foreign_callback_does_not_hide_followup_result(bridge_state):
     import json
 
-    store, conn, db, slack = fixture(tmp_path)
+    store, conn, db, slack = bridge_state
     sid = status(store, "resume", "stop watching")
     message(conn, "user", "stop watching", "new")
     for event in [
@@ -154,10 +154,10 @@ def test_restored_foreign_callback_does_not_hide_followup_result(tmp_path):
     assert "old callback" not in slack.edits[-1][1]
 
 
-def test_crashed_job_cannot_claim_queued_reply_after_foreign_callback(tmp_path):
+def test_crashed_job_cannot_claim_queued_reply_after_foreign_callback(bridge_state):
     import json
 
-    store, conn, db, slack = fixture(tmp_path)
+    store, conn, db, slack = bridge_state
     first = status(store, "job", "watch")
     message(conn, "user", "watch", "old")
     store.update(

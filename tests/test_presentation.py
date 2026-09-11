@@ -9,7 +9,7 @@ from slack_conductor.lifecycle import Turn
 from slack_conductor.poller import Poller
 from slack_conductor.presentation import STATES, live, pages, render
 from slack_conductor.slack_io import SlackIO
-from tests.support import event, fixture, message, result, status
+from tests.support import event, message, result, status
 
 
 def test_headers_and_background_content_survive_state_changes():
@@ -120,8 +120,8 @@ def test_rejected_markdown_falls_back_without_retrying_other_errors(method, erro
         assert calls[1]["text"] == text
 
 
-def test_steering_moves_content_below_followup_and_preserves_jobs_across_crash(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_steering_moves_content_below_followup_and_preserves_jobs_across_crash(bridge_state):
+    store, conn, db, slack = bridge_state
     first = status(store, "e1", "first")
     message(conn, "user", "first", "turn")
     event(conn, "task_started", task_id="job", description="build preview")
@@ -148,11 +148,10 @@ def test_steering_moves_content_below_followup_and_preserves_jobs_across_crash(t
     assert slack.edits[-1] == ("status-2", render("done", "Verified the steered change."))
     assert store.status(first)["state"] == "superseded"
     assert store.status(second)["state"] == "complete"
-    conn.close()
 
 
-def test_repeated_steers_retry_cleanup_and_deliver_long_answer_at_latest_message(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_repeated_steers_retry_cleanup_and_deliver_long_answer_at_latest_message(bridge_state):
+    store, conn, db, slack = bridge_state
     first = status(store, "e1", "first")
     message(conn, "user", "first", "turn")
     event(conn, "task_started", task_id="job", description="preview")
@@ -191,11 +190,10 @@ def test_repeated_steers_retry_cleanup_and_deliver_long_answer_at_latest_message
     assert slack.edits[-1] == ("status-3", pages("done", answer)[0])
     assert [post[2] for post in slack.posts] == pages("done", answer)[1:]
     assert store.status(new)["state"] == "complete"
-    conn.close()
 
 
-def test_error_result_renders_failed_and_preserves_partial_answer(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_error_result_renders_failed_and_preserves_partial_answer(bridge_state):
+    store, conn, db, slack = bridge_state
     status(store, "e1", "task")
     message(conn, "user", "task", "turn")
     message(
@@ -208,11 +206,10 @@ def test_error_result_renders_failed_and_preserves_partial_answer(tmp_path):
     )
     Poller(store, db, slack, settle_seconds=0).tick()
     assert slack.edits[-1][1] == render("failed", "Tests failed; changes retained.")
-    conn.close()
 
 
-def test_block_limit_continuations_resume_after_delivery_failure(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_block_limit_continuations_resume_after_delivery_failure(bridge_state):
+    store, conn, db, slack = bridge_state
     sid = status(store, "e1", "task")
     message(conn, "user", "task", "turn")
     answer = "\n\n".join(f"# Heading {i}" for i in range(75))
@@ -231,4 +228,3 @@ def test_block_limit_continuations_resume_after_delivery_failure(tmp_path):
     assert len(slack.edits) == 1
     assert [p[2] for p in slack.posts] == pages("done", answer)[1:]
     assert store.status(sid)["state"] == "complete"
-    conn.close()
