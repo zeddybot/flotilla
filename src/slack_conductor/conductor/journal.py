@@ -111,6 +111,9 @@ class Journal:
     def reconnect(self, generation, native):
         """Only idempotent operations may be redelivered to a fresh frontend."""
         with self.connect() as c:
+            # Reconciliation and frontend acknowledgments must not overwrite
+            # each other's decisions while the native database is being read.
+            c.execute("BEGIN IMMEDIATE")
             rows = c.execute("SELECT * FROM commands WHERE state='running'").fetchall()
             for row in rows:
                 body = json.loads(row["body"])
