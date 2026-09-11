@@ -67,7 +67,7 @@ try {
   await until(() => calls.some(c => c.route === 'result' && c.body.id === 'restore'));
   assert.deepEqual(applied, [true, true]); // recovery respects latest intent
   reject = true;
-  await assert.rejects(composer.setPaused({sessionId: 's', paused: false}), /journal unavailable/);
+  await assert.rejects(composer.setPaused({sessionId: 's', paused: false}), /attachment disconnected/);
   assert.deepEqual(applied, [true, true]);
   const retired = context.window.__flotilla;
   commands.push({id: 'shutdown', body: {op: 'detach'}});

@@ -26,16 +26,6 @@ class ConductorDB:
     def session(self, sid):
         return self.one("SELECT * FROM sessions WHERE id=?", (sid,))
 
-    def workspace_ids(self):
-        return {r["id"] for r in self.query("SELECT id FROM workspaces")}
-
-    def new_workspaces(self, before):
-        return [
-            r
-            for r in self.query("SELECT * FROM workspaces ORDER BY created_at DESC")
-            if r["id"] not in before
-        ]
-
     def cursor(self, sid):
         return self.one(
             "SELECT coalesce(max(rowid),0) AS n FROM session_messages WHERE session_id=?", (sid,)
@@ -82,33 +72,6 @@ class ConductorDB:
             if isinstance(payload, dict) and payload.get("message") == prompt:
                 return True
         return False
-
-    def send_mode(self):
-        # TOML supersedes legacy database settings in current Conductor.
-        import tomllib
-
-        p = Path.home() / ".conductor/settings.toml"
-        data = tomllib.loads(p.read_text()) if p.exists() else {}
-
-        def find(value):
-            if isinstance(value, dict):
-                for key, child in value.items():
-                    if key in {
-                        "default_message_send_mode",
-                        "message_send_mode",
-                        "follow_up_behavior",
-                    }:
-                        return child
-                    found = find(child)
-                    if found:
-                        return found
-            return None
-
-        mode = find(data)
-        if not mode:
-            rows = self.query("SELECT value FROM settings WHERE key='default_message_send_mode'")
-            mode = rows[0]["value"].strip('"') if rows else "steering"
-        return "queue" if mode in {"queue", "queued"} else "steer"
 
 
 def classify(row):

@@ -1,7 +1,9 @@
 """Authenticated loopback ingress for the attached Conductor frontend."""
 
 import json
+import os
 import secrets
+import tempfile
 import threading
 import time
 import uuid
@@ -70,10 +72,24 @@ class Transport:
                             return
                         elif route == "next" and not post:
                             result = owner.journal.claim(generation)
+                            if result and result["body"].get("sid") and result["body"].get("wid"):
+                                owner.bindings[result["body"]["sid"]] = result["body"]["wid"]
                         elif route == "valid" and not post:
                             result = True
                         elif route == "heartbeat" and post:
                             owner.heartbeat = {**body, "received_at": time.monotonic()}
+                            with tempfile.NamedTemporaryFile(
+                                mode="w", dir=state_dir, delete=False
+                            ) as f:
+                                json.dump(
+                                    {
+                                        **body,
+                                        "at": time.time(),
+                                        "incarnation": owner.attachment["incarnation"],
+                                    },
+                                    f,
+                                )
+                            os.replace(f.name, state_dir / "native-heartbeat.json")
                             result = True
                         elif route == "result" and post:
                             result = owner.journal.complete(body["id"], generation, body)

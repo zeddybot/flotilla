@@ -5,10 +5,11 @@ this same Codex conversation in an independent tmux server, outside Conductor's
 process tree. All Slack traffic was confined to the owner's Conductor bot DM.
 OS sleep/wake was explicitly excluded.
 
-This report distinguishes the experimental direct adapter from the production
-Accessibility bridge. The direct adapter has **not** been deployed. Its recovery
-changes live in the private test harness; the separate source changes cover model
-label matching, native-outbox visibility, and pending-plan presentation.
+This report records the earlier experimental qualification before the native-only
+cutover. The production implementation, pause-race fix, and post-crash background
+state follow-up are documented in [Native bridge](conductor-native-bridge.md).
+Statements about the experimental harness and restored Accessibility bridge below
+describe that earlier run, not the final implementation.
 
 ## Outcome
 

@@ -78,18 +78,6 @@ class Poller:
             self.store.thread_state(status, "idle")
 
     def reconcile(self):
-        # An AX action cannot participate in a SQLite transaction. Never replay
-        # an interrupted action automatically; pickup handles already-sent ones.
-        for status in self.store.rows("SELECT * FROM statuses WHERE state='preparing'"):
-            if status["status_ts"]:
-                self.finish(
-                    status,
-                    "bridge restarted before send was confirmed; check Conductor before retrying",
-                    "attention",
-                )
-            else:
-                self.store.update(status["id"], state="failed")
-        self.store.execute("UPDATE events SET state='interrupted' WHERE state='processing'")
         # Older runtimes persisted only a cursor. Reconstruct task state for
         # still-active turns before advancing past their historical events.
         for status in self.store.active():
@@ -173,12 +161,21 @@ class Poller:
             return
         session = self.db.session(status["session_id"])
         now = self.clock()
+        if session["status"] == "reconnecting":
+            self.idle_since.pop(status["id"], None)
+            text = render("reconnecting", Turn.load(status["tracking"]).content)
+            if self.last_text.get(status["id"]) != text:
+                self.slack.edit(status, text)
+                self.last_text[status["id"]] = text
+            return
         if session["status"] == "idle":
             self.idle_since.setdefault(status["id"], now)
         else:
             self.idle_since.pop(status["id"], None)
         if status["state"] == "active":
             turn = Turn.load(status["tracking"])
+            if session.get("runtime"):
+                turn.observe_runtime(session["runtime"], now)
             for row in self.db.messages(status["session_id"], status["cursor"]):
                 if turn.accepts(row, status["turn_id"]):
                     turn.consume(row)
@@ -224,6 +221,20 @@ class Poller:
                 status["id"], cursor=status["cursor"], latest=status["latest"], tracking=turn.dump()
             )
             status["tracking"] = turn.dump()
+            if (
+                turn.interrupted
+                and not turn.result_seq
+                and not turn.tasks
+                and now - self.idle_since.get(status["id"], now) >= self.settle_seconds
+            ):
+                self.finish(
+                    status,
+                    turn.content
+                    + "\n\nBackground work was interrupted and the agent is no longer running.",
+                    "attention",
+                    "background work interrupted",
+                )
+                return
             if ready:
                 self.finish(status, turn.content, "failed" if turn.is_error else "done")
                 return
@@ -253,6 +264,8 @@ class Poller:
                 return
         if status["state"] == "active":
             text = live(turn, status["note"])
+        elif session.get("runtime", {}).get("paused"):
+            text = render("attention", detail="message queued; queue paused in Conductor")
         elif status["note"].startswith("error:"):
             text = render("unconfirmed", status["note"], "send unconfirmed")
         else:

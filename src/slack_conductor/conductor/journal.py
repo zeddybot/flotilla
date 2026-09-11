@@ -97,7 +97,9 @@ class Journal:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             with self.connect() as c:
-                row = c.execute("SELECT response FROM commands WHERE id=?", (key,)).fetchone()
+                row = c.execute("SELECT response,state FROM commands WHERE id=?", (key,)).fetchone()
+            if row and row["state"] == "blocked":
+                raise Unconfirmed("Queue paused in Conductor")
             if row and row["response"]:
                 result = json.loads(row["response"])
                 if "error" in result:

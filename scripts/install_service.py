@@ -72,7 +72,7 @@ def main():
         target.unlink(missing_ok=True)
         print("LaunchAgent removed; credentials, runtime, and thread history retained")
         return
-    runtime = state / "runtime"
+    runtime = state / ("runtime-prepared" if args.prepare_only else "runtime")
     uv = shutil.which("uv")
     if not uv:
         raise RuntimeError("uv is required to install the runtime")
@@ -84,6 +84,9 @@ def main():
         if source.exists():
             shutil.copyfile(source, runtime / filename)
             (runtime / filename).chmod(0o600)
+    # Install the exact source tree so retired bridge modules cannot survive an upgrade.
+    if (runtime / "src").exists():
+        shutil.rmtree(runtime / "src")
     shutil.copytree(
         root / "src",
         runtime / "src",
@@ -91,6 +94,8 @@ def main():
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
     )
     subprocess.run([uv, "sync", "--frozen", "--no-dev", "--project", str(runtime)], check=True)
+    if args.prepare_only:
+        target = state / "prepared-launchagent.plist"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(plistlib.dumps(plist(runtime, state)))
     target.chmod(0o600)

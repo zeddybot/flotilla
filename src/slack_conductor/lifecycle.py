@@ -17,6 +17,9 @@ class Turn:
     settled_at: float | None = None
     callback_turn_id: str = ""
     ignore_callback: bool = False
+    runtime_epoch: str = ""
+    runtime_missing_since: float | None = None
+    interrupted: bool = False
 
     @classmethod
     def load(cls, value):
@@ -38,6 +41,17 @@ class Turn:
             event = json.loads(row["content"])
         except (ValueError, TypeError):
             event = {}
+        if (
+            isinstance(event, dict)
+            and event.get("type") == "result"
+            and event.get("conductor_sdk_metadata", {}).get("isForeignResult")
+            and row["turn_id"] in {own_turn, self.callback_turn_id}
+        ):
+            # A restored job can emit a foreign result before this user message's
+            # own response. That boundary ends the unrelated callback segment.
+            self.ignore_callback = False
+            self.callback_turn_id = ""
+            return False
         if (
             isinstance(event, dict)
             and event.get("type") == "system"
@@ -140,6 +154,36 @@ class Turn:
         self.result_seq = 0
         self.settled_at = None
         return True
+
+    def observe_runtime(self, runtime, now):
+        epoch, live = runtime["incarnation"], runtime["live"]
+        changed = bool(self.runtime_epoch and self.runtime_epoch != epoch)
+        self.runtime_epoch = epoch
+        active = {
+            t.get("taskId", t.get("id", t.get("task_id"))) for t in live.get("backgroundTasks", [])
+        }
+        missing = set(self.tasks) - active
+        pending = bool(missing or self.awaiting_callback)
+        idle = live.get("status") != "working"
+        if pending and idle:
+            if self.runtime_missing_since is None:
+                self.runtime_missing_since = now
+        else:
+            self.runtime_missing_since = None
+        expired = self.runtime_missing_since is not None and now - self.runtime_missing_since >= 5
+        if pending and (changed or expired):
+            for task in missing:
+                self.tasks.pop(task, None)
+                if task not in self.ended:
+                    self.ended.append(task)
+            self.awaiting_callback = False
+            self.result_seq = 0
+            self.settled_at = None
+            self.interrupted = True
+            self.phase = "working"
+            self.detail = "recovering after interrupted background work"
+        if self.interrupted and self.result_seq:
+            self.interrupted = False
 
     def ready(self, now, idle, settle_seconds):
         if not self.result_seq or self.tasks or self.awaiting_callback or not idle:
