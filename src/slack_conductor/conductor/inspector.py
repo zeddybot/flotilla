@@ -1,0 +1,237 @@
+import json
+import logging
+import shutil
+import subprocess
+import time
+from collections import deque
+from contextlib import contextmanager
+
+import ApplicationServices as AX
+import Quartz
+
+from .process import incarnation
+
+log = logging.getLogger(__name__)
+
+
+def attr(element, name):
+    err, value = AX.AXUIElementCopyAttributeValue(element, name, None)
+    return value if err == 0 else None
+
+
+def walk(root):
+    todo = deque([(root, 0)])
+    count = 0
+    while todo and count < 12000:
+        element, depth = todo.popleft()
+        count += 1
+        yield element
+        if depth < 60:
+            todo.extend((child, depth + 1) for child in (attr(element, "AXChildren") or []))
+
+
+def matches(element, role=None, title=None, prefix=None, description=None, url_suffix=None):
+    return (
+        (role is None or attr(element, "AXRole") == role)
+        and (title is None or attr(element, "AXTitle") == title)
+        and (prefix is None or str(attr(element, "AXTitle") or "").startswith(prefix))
+        and (description is None or attr(element, "AXDescription") == description)
+        and (url_suffix is None or str(attr(element, "AXURL") or "").endswith(url_suffix))
+    )
+
+
+class Inspector:
+    def __init__(self, state_dir):
+        self.state_dir = state_dir
+        self.pid = None
+        self.app = None
+
+    @staticmethod
+    def focused_pid():
+        # A fresh short-lived process avoids AppKit's stale application cache in
+        # the daemon. Reading NSWorkspace does not send Apple events to other apps.
+        result = subprocess.run(
+            [
+                "/usr/bin/osascript",
+                "-l",
+                "JavaScript",
+                "-e",
+                "ObjC.import('AppKit'); $.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        value = result.stdout.strip()
+        return int(value) if result.returncode == 0 and value.isdigit() else None
+
+    @staticmethod
+    def activate(pid, only_if=None):
+        condition = (
+            f"$.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier == {int(only_if)}"
+            if only_if
+            else "true"
+        )
+        subprocess.run(
+            [
+                "/usr/bin/osascript",
+                "-l",
+                "JavaScript",
+                "-e",
+                (
+                    "ObjC.import('AppKit'); "
+                    f"if ({condition}) {{ const app = $.NSRunningApplication.runningApplicationWithProcessIdentifier({int(pid)}); "
+                    "if (app) app.activateWithOptions(2); }"
+                ),
+            ],
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+
+    @staticmethod
+    def draft(prompt):
+        # Web Inspector's CodeMirror prompt exposes its text through children,
+        # while AXValue itself can be empty even with an unsent command.
+        return str(attr(prompt, "AXValue") or "") or "".join(
+            str(attr(e, "AXValue") or "")
+            for e in walk(prompt)
+            if attr(e, "AXRole") == "AXStaticText"
+        )
+
+    def connect(self):
+        if not AX.AXIsProcessTrusted():
+            raise RuntimeError(
+                "Accessibility permission required for the daemon Python interpreter"
+            )
+        current = incarnation()
+        if not current:
+            subprocess.run(["/usr/bin/open", "-a", "Conductor"], check=True, timeout=5)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and not current:
+                time.sleep(0.2)
+                current = incarnation()
+        if not current:
+            raise RuntimeError("Conductor not reachable")
+        self.pid = int(current.split(":", 1)[0])
+        self.app = AX.AXUIElementCreateApplication(self.pid)
+
+    def window(self):
+        windows = attr(self.app, "AXWindows") or []
+        return windows[0] if windows else attr(self.app, "AXMainWindow")
+
+    @contextmanager
+    def reachable(self):
+        self.connect()
+        switched = False
+        original_space = target_space = None
+        aerospace = shutil.which("aerospace")
+        try:
+            # AeroSpace can expose an AXWindow while parking it offscreen. Its
+            # existence does not prove that Web Inspector can receive Return.
+            if aerospace:
+                result = subprocess.run(
+                    [
+                        aerospace,
+                        "list-windows",
+                        "--monitor",
+                        "all",
+                        "--app-bundle-id",
+                        "com.conductor.app",
+                        "--format",
+                        "%{workspace}",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                spaces = result.stdout.splitlines() if result.returncode == 0 else []
+                if spaces:
+                    original_space = subprocess.check_output(
+                        [aerospace, "list-workspaces", "--focused"], text=True, timeout=5
+                    ).strip()
+                    target_space = spaces[0]
+                    if target_space != original_space:
+                        subprocess.run(
+                            [aerospace, "workspace", target_space], check=True, timeout=5
+                        )
+                        switched = True
+            if self.window() is None:
+                if not switched:
+                    subprocess.run(["/usr/bin/open", "-a", "Conductor"], check=True, timeout=5)
+                self.wait(lambda: self.window(), "Conductor not reachable", 5)
+            yield
+        finally:
+            if switched and original_space:
+                current_space = subprocess.check_output(
+                    [aerospace, "list-workspaces", "--focused"], text=True, timeout=5
+                ).strip()
+                if current_space == target_space:
+                    subprocess.run([aerospace, "workspace", original_space], timeout=5, check=False)
+
+    def find(self, root=None, **selector):
+        root = root if root is not None else self.window()
+        if root is None:
+            return None
+        return next((e for e in walk(root) if matches(e, **selector)), None)
+
+    def require(self, root=None, **selector):
+        found = self.find(root, **selector)
+        if found is None:
+            self.snapshot()
+            raise RuntimeError(f"Conductor UI changed: {selector}")
+        return found
+
+    def snapshot(self):
+        # Omit AXValue: it contains chat text and potentially secrets.
+        rows = (
+            [
+                {
+                    key: str(attr(e, key) or "")[:200]
+                    for key in ("AXRole", "AXTitle", "AXDescription", "AXURL")
+                }
+                for e in walk(self.window())
+            ]
+            if self.window() is not None
+            else []
+        )
+        path = self.state_dir / "last-ax-tree.json"
+        path.write_text(json.dumps(rows, indent=2))
+        path.chmod(0o600)
+        log.error("Accessibility selector snapshot: %s", path)
+
+    @staticmethod
+    def press(element, action="AXPress"):
+        error = AX.AXUIElementPerformAction(element, action)
+        if error:
+            raise RuntimeError(f"Accessibility action {action} failed ({error})")
+
+    @staticmethod
+    def set(element, name, value):
+        error = AX.AXUIElementSetAttributeValue(element, name, value)
+        if error:
+            raise RuntimeError(f"Accessibility set {name} failed ({error})")
+
+    @staticmethod
+    def wait(predicate, message, timeout=5):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            value = predicate()
+            if value:
+                return value
+            time.sleep(0.15)
+        raise RuntimeError(message)
+
+    def type_text(self, text):
+        # A Unicode text event carries embedded newlines without pressing Return,
+        # and targets Conductor directly without touching the system clipboard.
+        for down in (True, False):
+            event = Quartz.CGEventCreateKeyboardEvent(None, 0, down)
+            Quartz.CGEventSetFlags(event, 0)
+            if down:
+                Quartz.CGEventKeyboardSetUnicodeString(
+                    event, len(text.encode("utf-16-le")) // 2, text
+                )
+            Quartz.CGEventPostToPid(self.pid, event)
