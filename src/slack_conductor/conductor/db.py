@@ -59,6 +59,30 @@ class ConductorDB:
         )
         return rows[0] if rows else None
 
+    def pending(self, sid, prompt):
+        if self.query(
+            "SELECT id FROM session_messages WHERE session_id=? AND role='user' "
+            "AND content=? AND sent_at IS NULL AND cancelled_at IS NULL",
+            (sid, prompt),
+        ):
+            return True
+        if not self.query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='session_messages_outbox'"
+        ):
+            return False
+        for row in self.query(
+            "SELECT delivery_payload FROM session_messages_outbox WHERE session_id=? "
+            "AND state IN ('waiting','uploading','ready','sending')",
+            (sid,),
+        ):
+            try:
+                payload = json.loads(row["delivery_payload"])
+            except (TypeError, ValueError):
+                continue
+            if isinstance(payload, dict) and payload.get("message") == prompt:
+                return True
+        return False
+
     def send_mode(self):
         # TOML supersedes legacy database settings in current Conductor.
         import tomllib

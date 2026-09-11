@@ -308,3 +308,45 @@ def test_callback_on_newer_turn_updates_job_owner_without_overwriting_queued_rep
     assert store.status(first)["result"] == "Build verified; no work remaining."
     assert store.status(second)["result"] == "Queued request answer."
     conn.close()
+
+
+def test_pending_plan_remains_attention_when_reload_resets_native_status(tmp_path):
+    store, conn, db, slack = fixture(tmp_path)
+    sid = status(store, "plan", "prepare a plan")
+    message(conn, "user", "prepare a plan", "plan-turn")
+    message(
+        conn,
+        "assistant",
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "ExitPlanMode",
+                            "input": {"plan": "create a file"},
+                        }
+                    ]
+                },
+            }
+        ),
+        "plan-turn",
+    )
+    now = [100.0]
+    poller = Poller(store, db, slack, clock=lambda: now[0], settle_seconds=0)
+    poller.tick()
+    assert Turn.load(store.status(sid)["tracking"]).phase == "attention"
+    now[0] += 90
+    poller = Poller(store, db, slack, clock=lambda: now[0], settle_seconds=0)
+    poller.reconcile()
+    now[0] += 90
+    poller.tick()
+    assert store.status(sid)["state"] == "active"
+    assert Turn.load(store.status(sid)["tracking"]).detail == "plan approval requested in Conductor"
+    result(conn, "plan-approved", "plan-turn")
+    poller.tick()
+    now[0] += 3
+    poller.tick()
+    assert store.status(sid)["state"] == "complete"
+    assert store.status(sid)["result"] == "plan-approved"
