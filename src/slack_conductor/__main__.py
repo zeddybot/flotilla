@@ -3,8 +3,8 @@ import json
 import time
 from pathlib import Path
 
-from .conductor.actions import Conductor
 from .conductor.db import classify
+from .conductor.native import Conductor
 from .config import Config
 
 
@@ -29,7 +29,7 @@ def main():
     tail.add_argument("session")
     args = parser.parse_args()
     config = Config.load(args.root)
-    conductor = Conductor(config)
+    conductor = Conductor(config, client=args.command != "daemon")
     options = {
         "model": config.model,
         "effort": config.effort,
@@ -41,9 +41,10 @@ def main():
 
         daemon(args.root, config, conductor)
     elif args.command == "doctor":
-        conductor.ax.check()
-        conductor.db.workspace_ids()
-        print("Conductor database readable; Accessibility selectors available")
+        conductor.db.query("SELECT id FROM repos LIMIT 1")
+        if not conductor.transport.online():
+            raise RuntimeError("Native attachment is not ready; check daemon.log")
+        print("Conductor database readable; native frontend attached")
     elif args.command == "new":
         if args.repo.resolve() != config.repo.resolve():
             parser.error("repo must match config.toml")

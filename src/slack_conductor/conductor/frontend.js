@@ -22,14 +22,15 @@
   window.__flotilla?.detach();
   const p = {stopped: false, sessions: {}, bindings: {...config.bindings}, watches: {}, serial: {}};
   window.__flotilla = p;
+  class Disconnected extends Error {}
   const request = async (route, data) => {
     const response = await fetch(config.base + '/' + route +
       (data === undefined ? (route.includes('?') ? '&' : '?') + 'generation=' + config.generation : ''),
       data === undefined ? {signal: AbortSignal.timeout(5000)} : {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({...data, generation: config.generation}), signal: AbortSignal.timeout(5000)
-      });
-    if (!response.ok) throw Error('Conductor attachment disconnected');
+      }).catch(() => { throw new Disconnected('Conductor attachment disconnected'); });
+    if (!response.ok) throw new Disconnected('Conductor attachment disconnected');
     return response.json();
   };
   const serial = (sid, action) => {
@@ -38,9 +39,9 @@
     return next;
   };
   const lease = async () => {
-    if (p.stopped) throw Error('Conductor attachment replaced');
+    if (p.stopped) throw new Disconnected('Conductor attachment replaced');
     await request('valid');
-    if (p.stopped) throw Error('Conductor attachment replaced');
+    if (p.stopped) throw new Disconnected('Conductor attachment replaced');
   };
   const originalPause = composer.setPaused;
   const originalSend = composer.sendMessage;
@@ -69,7 +70,6 @@
     p.bindings[sid] = wid;
     if (!p.watches[sid]) p.watches[sid] = await composer.watchSession({workspaceId: wid, sessionId: sid});
     await composer.refresh({sessionId: sid});
-    if (!w.activeSessionId) await workspace.setActiveSessionId({workspaceId: wid, activeSessionId: sid});
     return s;
   };
   async function execute(c) {
@@ -89,6 +89,7 @@
     }
     await bind(c.wid, c.sid);
     await lease();
+    if (c.op === 'createdSession') return workspace.setActiveSessionId({workspaceId: c.wid, activeSessionId: c.sid});
     if (c.op === 'configure') return session.updateSessionModelConfiguration({sessionId: c.sid, configuration: c.configuration});
     if (c.op === 'watch') return serial(c.sid, async () => {
       const intent = await request('pause?sid=' + encodeURIComponent(c.sid));
@@ -143,7 +144,7 @@
           if (p.stopped) break;
           await request('valid');
           result = {value: await execute(c.body)};
-        } catch (e) { result = {error: String(e)}; }
+        } catch (e) { result = e instanceof Disconnected ? {retry: true} : {error: String(e)}; }
         // Detach stops polling, but its completion still needs an acknowledgement.
         do {
           try { await request('result', {id: c.id, ...result}); break; }

@@ -35,6 +35,8 @@ class Store:
         self.path = path
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+            if "retry_at" not in {row[1] for row in conn.execute("PRAGMA table_info(events)")}:
+                conn.execute("ALTER TABLE events ADD COLUMN retry_at REAL NOT NULL DEFAULT 0")
             columns = {row[1] for row in conn.execute("PRAGMA table_info(statuses)")}
             if "tracking" not in columns:
                 conn.execute("ALTER TABLE statuses ADD COLUMN tracking TEXT NOT NULL DEFAULT '{}'")
@@ -84,7 +86,7 @@ class Store:
 
     def next_event(self):
         rows = self.rows(
-            "SELECT * FROM events WHERE state='pending' ORDER BY created,rowid LIMIT 1"
+            "SELECT * FROM events WHERE state='pending' AND retry_at<=unixepoch('now') ORDER BY created,rowid LIMIT 1"
         )
         return rows[0] if rows else None
 
@@ -114,10 +116,14 @@ class Store:
         )
 
     def add_status(self, event_key, channel, thread_ts, prompt, options):
-        return self.execute(
-            "INSERT INTO statuses(event_key,channel,thread_ts,prompt,options) VALUES (?,?,?,?,?)",
-            (event_key, channel, thread_ts, prompt, json.dumps(options)),
-        )
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO statuses(event_key,channel,thread_ts,prompt,options) VALUES (?,?,?,?,?)",
+                (event_key, channel, thread_ts, prompt, json.dumps(options)),
+            )
+            return conn.execute(
+                "SELECT id FROM statuses WHERE event_key=?", (event_key,)
+            ).fetchone()[0]
 
     def update(self, status_id, **values):
         allowed = {

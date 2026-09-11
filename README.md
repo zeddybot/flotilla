@@ -34,11 +34,11 @@ SLACK_TEAM_ID=your-slack-team-id
 
 `.env` and local `config.toml` are gitignored. Credentials must have mode `600`; the daemon refuses group/world-readable `.env` files. Tokens are never written into the launchd plist. This uses [Bolt Socket Mode](https://docs.slack.dev/tools/bolt-python/concepts/socket-mode/) without a public HTTP endpoint. Channel events and mention events are deduplicated, and channel messages require an explicit bot mention even in mapped threads.
 
-Verify the adapter, then install the daemon:
+Install the daemon, then verify its native attachment:
 
 ```sh
-uv run sc doctor
 uv run python scripts/install_service.py
+uv run sc doctor
 ```
 
 The installer copies a private runtime (including a mode-600 credential copy) into `~/Library/Application Support/slack-conductor/runtime`, installs locked production dependencies, and registers `~/Library/LaunchAgents/com.sameer.slack-conductor.plist`. This keeps the service independent of the development worktree. Rerun the installer after changing code, configuration, or credentials.
@@ -69,9 +69,9 @@ Invite **Conductor** to the channel first, then:
 
 The defaults are Fable 5.1, high effort, and steering. A follow-up while the agent is working goes into its running turn; `[queue]` waits and starts a separate turn afterward. An idle agent starts either kind immediately. The model tokens select Conductor's current picker labels: `[astra]` → GPT-6 Astra, `[sol]` → 5.6 Sol, `[terra]` → 5.6 Terra, `[luna]` → 5.6 Luna, and `[sonnet]` → Sonnet 5 1M.
 
-The tokens must lead the prompt, after an optional bot mention. Model, effort, fast, verbose, and send mode are sticky in each Slack thread: after `[queue]`, use `[steer]` to return that thread to steering. Model/effort/fast selection is best effort; mismatches appear in the status. Unknown bracket tokens remain prompt text. `[close]` archives the mapped workspace and may stop its running agent. `[new]` maps the thread to a new workspace; any older active turn still delivers its own result.
+The tokens must lead the prompt, after an optional bot mention. Model, effort, and fast mode are configured when a session starts; use `[new]` to change them. Verbose and send mode are sticky in each Slack thread: after `[queue]`, use `[steer]` to return that thread to steering. Model/effort/fast selection is best effort; mismatches appear in the status. Unknown bracket tokens remain prompt text. `[close]` archives the mapped workspace and may stop its running agent. `[new]` maps the thread to a new workspace; any older active turn still delivers its own result.
 
-The bridge serializes UI actions across all threads, refuses to overwrite unsent drafts, checks the target workspace and active session, and uses a unique Slack header to correlate each message with its agent turn. Keep the app available; AeroSpace recovery can briefly switch desktops. Avoid navigating or editing Conductor during the brief send operation.
+The bridge calls Conductor’s native services for creation, configuration, sending, queueing, steering, and archiving. This is the only control path. It binds each Slack thread to a workspace and session independently of the selected chat, so you can continue typing and navigating in Conductor. Inspector opens briefly during startup/reconnection to attach the native dispatcher, then closes. Accessibility permission is needed only for that bootstrap; agent prompts never pass through the UI composer.
 
 ## Recovery and diagnostics
 
@@ -87,13 +87,13 @@ The header follows Creating workspace, Starting, Thinking, Working, Waiting, Que
 
 A result with outstanding background jobs is an interim update. The bridge tracks job completion/failure/cancellation and the agent's resumed response, including across restarts. Done requires a result, no outstanding tracked jobs or pending callback, and two seconds at rest. Job failure alone does not mean the agent has failed. A subsequent queued turn may run while the previous turn's final answer is delivered.
 
-After steering pickup is confirmed, the run's status, content, and background-job tracking move into the new acknowledgment below your steering message. The older response is deleted, so the final answer and any continuations appear below the steer. Queued follow-ups keep the previous run's message through Done and get separate messages. Needs attention reports actionable bridge failures and explicit agent question events; blocked states are not inferred from ordinary prose. Long-lived tracked jobs remain outstanding until they finish or are cancelled.
+After steering pickup is confirmed, the run's status, content, and background-job tracking move into the new acknowledgment below your steering message. The older response is deleted, so the final answer and any continuations appear below the steer. Queued follow-ups keep the previous run's message through Done and get separate messages. Needs attention reports actionable bridge failures and explicit agent question events; blocked states are not inferred from ordinary prose. The native runner also reconciles tracked jobs after a crash: jobs missing from the recovered runner no longer keep Slack waiting. A resumed agent is Working until its new result; an agent that has stopped without a new result needs attention.
 
 This handoff also applies when steering a run that is waiting on background work and Conductor assigns the follow-up a new native turn ID. The bridge checks job/callback state immediately before that follow-up, then transfers ownership before processing its output. A previous run that already finished its work keeps its separate reply, even if its Done update has not reached Slack yet.
 
-The private state directory contains `bridge.sqlite`, `daemon.lock`, rotating `daemon.log`, launchd startup logs, and the latest selector-failure snapshot. The snapshot omits AX values; treat all local logs and state as private because prompts, tool descriptions, and results can contain sensitive information.
+The private state directory contains `bridge.sqlite`, `native.sqlite` (commands and pause intent), `native-heartbeat.json`, `daemon.lock`, rotating `daemon.log`, launchd startup logs, and the latest selector-failure snapshot. The snapshot omits AX values; treat all local logs and state as private because prompts, tool descriptions, and results can contain sensitive information.
 
-Incoming Slack messages are durably deduplicated by workspace/channel/message timestamp, including overlapping mention and message events. Restart recovery resumes queued/running turns and partially delivered results. It never blindly replays an interrupted UI send. If delivery is ambiguous, check Conductor before retrying. Slack and local SQLite cannot commit atomically: deterministic Slack message IDs reduce duplicate posts, but this is not an exactly-once transport.
+Incoming Slack messages are durably deduplicated by workspace/channel/message timestamp, including overlapping mention and message events. Restart recovery resumes queued/running turns and partially delivered results. Native sends have stable IDs and a durable command journal. Recovery checks both accepted messages and the native outbox before resubmitting an interrupted operation; workspace creation also reuses its original identity. Slack and local SQLite cannot commit atomically: deterministic Slack message IDs reduce duplicate posts, but this is not an exactly-once transport.
 
 A heartbeat watchdog requests a daemon restart after 120 seconds without a new Socket Mode pong. Repeated socket creation does not reset this deadline: a running process can otherwise remain stuck reconnecting indefinitely. launchd restarts the process, and persisted turns resume. Messages never received during a Slack outage are not automatically recovered from channel history.
 
@@ -141,3 +141,13 @@ uv run sc daemon
 These commands act on real Conductor workspaces. Do not run the action commands concurrently with the daemon. The daemon takes an exclusive lock to prevent duplicate service instances.
 
 Targeted tests: `uv run pytest tests/test_db.py tests/test_bridge.py -q`. CI checks the bridge tests and Python formatting. Live macOS Accessibility and Slack installation require local verification. Design and original constraints: [SPEC.md](SPEC.md).
+
+## Native recovery
+
+Queue pause/resume intent is written durably before the native action is acknowledged. Reattachment restores that intent, so a newer stop wins over an older send retry. A pre-existing queue with unknown intent is left paused. A new explicit send follows Conductor’s normal resume behavior. Slack shows a paused queued message as Needs attention.
+
+Quitting Conductor may kill its background shell jobs; the bridge does not rerun their commands automatically. It reconciles the live runner and transcript and updates Slack accordingly. Recovering lost plan-mode approval callbacks is out of scope.
+
+The native integration uses Conductor’s internal frontend services and validates them at attachment. App updates are allowed; an incompatible interface reports a reconnect/attachment error instead of switching to UI automation. See [the implementation and validation record](docs/conductor-native-bridge.md).
+
+`sc new`, `sc send`, and `sc archive` submit native commands through the running daemon. `sc doctor` checks its native attachment. Install/start the LaunchAgent before using those commands. The installer replaces the runtime source tree exactly, removing retired modules; `--prepare-only` builds a separate runtime without modifying the running service.

@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 
 from .attachment import Attachment, incarnation
+from .client import Client
 from .db import ConductorDB
 from .journal import Unconfirmed
 from .models import configuration, model_id
@@ -64,9 +65,13 @@ class NativeDB(ConductorDB):
 
 
 class Conductor:
-    def __init__(self, config):
+    def __init__(self, config, *, client=False):
         self.config = config
-        self.transport = Transport(config.state_dir, lambda current: incarnation() == current)
+        self.transport = (
+            Client(config.state_dir)
+            if client
+            else Transport(config.state_dir, lambda current: incarnation() == current)
+        )
         self.db = NativeDB(config.conductor_db, self.transport)
         self.attachment = Attachment(self.transport, config.state_dir)
         self.generation = None
@@ -120,7 +125,7 @@ class Conductor:
             raise RuntimeError("Refusing workspace outside configured repository")
         if workspace["state"] == "archived":
             raise RuntimeError("workspace archived; use [new]")
-        if sid and super(NativeDB, self.db).session(sid)["workspace_id"] != wid:
+        if sid and ConductorDB.session(self.db, sid)["workspace_id"] != wid:
             raise RuntimeError("Conductor session does not belong to this workspace")
         return {**workspace, **({"active_session_id": sid} if sid else {})}
 
@@ -144,7 +149,13 @@ class Conductor:
             workspaces = self.db.query("SELECT * FROM workspaces WHERE id=?", (wid,))
             sessions = self.db.query("SELECT * FROM sessions WHERE workspace_id=?", (wid,))
             if workspaces and workspaces[0]["state"] == "ready" and len(sessions) == 1:
-                return self.validate(wid, sessions[0]["id"])
+                sid = sessions[0]["id"]
+                if not workspaces[0]["active_session_id"]:
+                    self.transport.call(
+                        {"op": "createdSession", "wid": wid, "sid": sid},
+                        key="created-session:" + wid,
+                    )
+                return self.validate(wid, sid)
             if len(sessions) > 1:
                 raise RuntimeError("Workspace creation has ambiguous sessions")
             time.sleep(0.2)
@@ -176,7 +187,7 @@ class Conductor:
                 )
                 warning = f"requested configuration unavailable; using default {self.config.model}"
         else:
-            current = super(NativeDB, self.db).session(sid)
+            current = ConductorDB.session(self.db, sid)
             if current["model"] != config["model"]:
                 warning = f"session model remains {current['model']}; use [new] to change it"
         mid = identity(sid + ":" + prompt)
