@@ -1,4 +1,4 @@
-"""Every Slack message has a live status header and optional stable content."""
+"""Slack status replies have a live header; overflow replies contain only content."""
 
 import html
 
@@ -28,10 +28,10 @@ def pages(phase, content="", detail="", note=""):
     detail = html.escape(" ".join(str(detail).split())[:120])
     header = f"{emoji} *{label}*" + (f" · {detail}" if detail else "")
     body = content + (f"\n\nNote: {note}" if note else "")
-    # Reserve room for the header, including escaped characters and continuation.
+    # Reserve room for the first page's header, including escaped characters.
     parts = markdown_chunks(body.strip(), limit=3900 - len(header) - 20) if body.strip() else [""]
     return [
-        header + (" · continued" if i else "") + (f"\n\n{part}" if part else "")
+        (header + (f"\n\n{part}" if part else "")) if i == 0 else part
         for i, part in enumerate(parts)
     ]
 
@@ -40,10 +40,12 @@ def render(phase, content="", detail="", note=""):
     return pages(phase, content, detail, note)[0]
 
 
-def blocks(text, images=None):
+def blocks(text, images=None, *, status_header=True):
     """Keep the status in Slack syntax; let Slack render the agent's Markdown."""
-    header, _, body = text.partition("\n\n")
-    output = [{"type": "section", "text": {"type": "mrkdwn", "text": header}}]
+    output, body = [], text
+    if status_header:
+        header, _, body = text.partition("\n\n")
+        output.append({"type": "section", "text": {"type": "mrkdwn", "text": header}})
     if body:
         output.extend(
             image_blocks(body, images) if images else [{"type": "markdown", "text": body}]

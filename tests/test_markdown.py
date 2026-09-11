@@ -103,8 +103,11 @@ def test_inline_code_and_quote_continuations_stay_formatted():
             assert any(t.type == expected for t in tokens)
 
 
-def test_continuations_keep_status_headers_for_block_limit_splits():
+def test_continuations_preserve_headings_without_repeating_status():
     output = pages("done", "\n\n".join(f"# Heading {i}" for i in range(75)))
     assert len(output) == 4
     assert output[0].startswith("✅ *Done*\n\n")
-    assert all(p.startswith("✅ *Done* · continued\n\n") for p in output[1:])
+    assert all(p.startswith("# Heading") for p in output[1:])
+    assert "\n\n".join([output[0].split("\n\n", 1)[1], *output[1:]]) == "\n\n".join(
+        f"# Heading {i}" for i in range(75)
+    )

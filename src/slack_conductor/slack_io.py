@@ -22,13 +22,13 @@ class SlackIO:
                     raise
                 time.sleep(max(1, int(exc.response.headers.get("Retry-After", "1"))))
 
-    def post(self, channel, thread_ts, text, key, *, images=None):
+    def post(self, channel, thread_ts, text, key, *, images=None, status_header=True):
         return self._message(
             "chat_postMessage",
             channel=channel,
             thread_ts=thread_ts,
             text=text,
-            blocks=blocks(text, images),
+            blocks=blocks(text, images, status_header=status_header),
             client_msg_id=str(uuid.uuid5(uuid.NAMESPACE_URL, key)),
             unfurl_links=False,
             unfurl_media=False,
