@@ -40,6 +40,17 @@ class ConductorDB:
             (sid, after),
         )
 
+    def has_user_messages(self, sid):
+        """An accepted outbox message freezes initial configuration too."""
+        return bool(
+            self.query(
+                "SELECT id FROM session_messages WHERE session_id=? AND role='user' LIMIT 1", (sid,)
+            )
+            or self.query(
+                "SELECT message_id FROM session_messages_outbox WHERE session_id=? LIMIT 1", (sid,)
+            )
+        )
+
     def has_later_turn(self, sid, after, own_turn):
         """Whether a sent user message has started another turn after this result."""
         return bool(

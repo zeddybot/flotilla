@@ -153,10 +153,7 @@ class Conductor:
         self.validate(wid, sid)
         self.transport.bindings[sid] = wid
         config, warning = configuration(options, self.config.model)
-        rows = self.db.query(
-            "SELECT id FROM session_messages WHERE session_id=? AND role='user' LIMIT 1", (sid,)
-        )
-        if not rows:
+        if not self.db.has_user_messages(sid):
             try:
                 self.transport.call(
                     {"op": "configure", "wid": wid, "sid": sid, "configuration": config},

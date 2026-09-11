@@ -2,14 +2,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
-const applied = [], calls = [], commands = [];
+const applied = [], calls = [], commands = [], sent = [], configured = [];
 let intent = {paused: false}, release, block = false, reject = false;
 const composer = {
   state: {sessions: {s: {paused: false}}},
   watchSession: async () => ({cancel() {}}), refresh: async () => {},
   getDraftAttachments() {},
   async setPaused(args) { applied.push(args.paused); return {ok: true}; },
-  async sendMessage() { return {ok: true}; }
+  async sendMessage(args) { sent.push(args); return {ok: true}; }
 };
 const original = composer.setPaused;
 const testExports = {
@@ -18,7 +18,8 @@ const testExports = {
     getWorkspaces: async () => [], createWorkspaceWithSetup() {},
     dependencies: {repo: {getRepos: async () => []}}
   },
-  session: {getSession: async () => ({workspaceId: 'w'}), updateSessionModelConfiguration() {}},
+  session: {getSession: async sid => ({workspaceId: sid === 'foreign' ? 'elsewhere' : 'w'}),
+    updateSessionModelConfiguration(args) { configured.push(args); return true; }},
   composer,
   sidecar: {getSessionStatus: async () => ({status: 'idle'}), query() {}, resolveToolApproval() {}}
 };
@@ -66,6 +67,33 @@ try {
   await pause;
   await until(() => calls.some(c => c.route === 'result' && c.body.id === 'restore'));
   assert.deepEqual(applied, [true, true]); // recovery respects latest intent
+  const dispatch = async (id, body) => {
+    commands.push({id, body});
+    await until(() => calls.some(c => c.route === 'result' && c.body.id === id));
+    return calls.find(c => c.route === 'result' && c.body.id === id).body;
+  };
+  const configuration = {model: 'gpt-6-astra', agent: 'codex', thinkingLevel: 'high', fastMode: true};
+  assert.equal((await dispatch('configure', {op: 'configure', wid: 'w', sid: 's', configuration})).value, true);
+  assert.equal(configured.length, 1);
+  assert.equal(configured[0].sessionId, 's');
+  assert.deepEqual(JSON.parse(JSON.stringify(configured[0].configuration)), configuration);
+  for (const mode of ['queue', 'steer']) {
+    const result = await dispatch(mode, {op: 'send', wid: 'w', sid: 's', message_id: mode, mode, prompt: 'hello'});
+    assert.equal(result.value.ok, true);
+    assert.equal(sent.at(-1).mode, mode);
+    assert.equal(sent.at(-1).sessionId, 's');
+    assert.equal(sent.at(-1).messageId, mode);
+    assert.equal(sent.at(-1).message, 'hello');
+  }
+  const before = sent.length;
+  const invalid = await dispatch('foreign', {op: 'send', wid: 'w', sid: 'foreign', message_id: 'bad', mode: 'steer', prompt: 'wrong session'});
+  assert.match(invalid.error, /target changed/);
+  assert.equal(sent.length, before);
+  // Unbound desktop sessions are not intercepted or made dependent on the bridge.
+  const recorded = calls.filter(c => c.route === 'pause').length;
+  await composer.sendMessage({sessionId: 'desktop', message: 'local'});
+  assert.equal(calls.filter(c => c.route === 'pause').length, recorded);
+  assert.equal(sent.at(-1).sessionId, 'desktop');
   reject = true;
   await assert.rejects(composer.setPaused({sessionId: 's', paused: false}), /attachment disconnected/);
   assert.deepEqual(applied, [true, true]);
@@ -79,7 +107,7 @@ try {
   composer.setPaused = replacement;
   retired.detach();
   assert.equal(composer.setPaused, replacement); // late heartbeat rejection cannot undo a replacement
-  console.log('pause write-ahead, recovery ordering, journal failure, and detach passed');
+  console.log('configuration, queue/steer identity, session isolation, pause recovery, and detach passed');
 } finally {
   context.window.__flotilla?.detach();
   for (const timer of timers) clearInterval(timer);
