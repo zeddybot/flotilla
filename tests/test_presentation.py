@@ -4,13 +4,12 @@ from types import SimpleNamespace
 import pytest
 from slack_sdk.errors import SlackApiError
 from slack_sdk.web.slack_response import SlackResponse
-from test_bridge import fixture, message, result, status
-from test_lifecycle import event
 
 from slack_conductor.lifecycle import Turn
 from slack_conductor.poller import Poller
 from slack_conductor.presentation import STATES, live, pages, render
 from slack_conductor.slack_io import SlackIO
+from tests.support import event, fixture, message, result, status
 
 
 def test_headers_and_background_content_survive_state_changes():

@@ -1,14 +1,12 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from test_bridge import fixture, message, result, status
-from test_lifecycle import event
-
 from slack_conductor.file_links import references
 from slack_conductor.poller import Poller
 from slack_conductor.presentation import blocks, pages
 from slack_conductor.slack_io import SlackIO
 from slack_conductor.store import Store
+from tests.support import event, fixture, message, result, status
 
 
 def test_final_steered_reply_owns_uploads_and_restart_does_not_repeat_them(tmp_path):

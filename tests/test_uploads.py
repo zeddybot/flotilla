@@ -2,10 +2,10 @@ import json
 from pathlib import Path
 
 from slack_sdk.errors import SlackApiError
-from test_bridge import fixture, status
 
 from slack_conductor.store import Store
 from slack_conductor.uploads import Uploads
+from tests.support import fixture, status
 
 
 def test_snapshot_and_finalize_recovery_reuse_the_same_file_id(tmp_path):

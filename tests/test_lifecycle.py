@@ -1,15 +1,11 @@
 import json
 
 import pytest
-from test_bridge import fixture, message, result, status
 
 from slack_conductor.lifecycle import Turn
 from slack_conductor.poller import Poller
 from slack_conductor.store import Store
-
-
-def event(conn, subtype, *, turn="turn", **values):
-    message(conn, "assistant", json.dumps({"type": "system", "subtype": subtype, **values}), turn)
+from tests.support import event, fixture, message, result, status
 
 
 @pytest.mark.parametrize("polled_job", [False, True])
