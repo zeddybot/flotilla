@@ -8,7 +8,7 @@ The bot always sends the configured owner a fresh DM when a reply reaches **Done
 
 Notification delivery is persisted separately from answer delivery. After a lost send response, the bridge checks DM history for the same notification before retrying. If the very first DM response is lost before the bridge knows the DM channel, sending a message to the bot supplies that identity and allows reconciliation. Slack desktop/mobile alerts still follow your Slack notification and Do Not Disturb settings.
 
-Only the configured Slack owner can issue commands. The bridge reads Conductor's SQLite database in read-only mode and uses macOS Accessibility for all actions. It never writes Conductor's database. Ordinary messages typed in Conductor are not relayed.
+Only the configured Slack owner can issue commands. The bridge reads Conductor's SQLite database in read-only mode and calls its native services for agent actions. macOS Accessibility is used only to attach the native dispatcher. It never writes Conductor's database. Ordinary messages typed in Conductor are not relayed.
 
 ## Install
 
@@ -91,7 +91,7 @@ After steering pickup is confirmed, the run's status, content, and background-jo
 
 This handoff also applies when steering a run that is waiting on background work and Conductor assigns the follow-up a new native turn ID. The bridge checks job/callback state immediately before that follow-up, then transfers ownership before processing its output. A previous run that already finished its work keeps its separate reply, even if its Done update has not reached Slack yet.
 
-The private state directory contains `bridge.sqlite`, `native.sqlite` (commands and pause intent), `native-heartbeat.json`, `daemon.lock`, rotating `daemon.log`, launchd startup logs, and the latest selector-failure snapshot. The snapshot omits AX values; treat all local logs and state as private because prompts, tool descriptions, and results can contain sensitive information.
+The private state directory contains `bridge.sqlite`, `native.sqlite` (commands and pause intent), `native-heartbeat.json`, `daemon.lock`, rotating `daemon.log`, launchd startup logs. Treat all local logs and state as private because prompts, tool descriptions, and results can contain sensitive information.
 
 Incoming Slack messages are durably deduplicated by workspace/channel/message timestamp, including overlapping mention and message events. Restart recovery resumes queued/running turns and partially delivered results. Native sends have stable IDs and a durable command journal. Recovery checks both accepted messages and the native outbox before resubmitting an interrupted operation; workspace creation also reuses its original identity. Slack and local SQLite cannot commit atomically: deterministic Slack message IDs reduce duplicate posts, but this is not an exactly-once transport.
 

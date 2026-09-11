@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from slack_conductor.config import Config
 from slack_conductor.poller import Poller
 from slack_conductor.presentation import render
-from slack_conductor.protocol import chunks, parse
+from slack_conductor.protocol import parse
 from slack_conductor.slack_app import Bridge
 from slack_conductor.store import Store
 from tests.support import fixture, message, result, status
@@ -37,15 +37,6 @@ def test_default_steering_and_explicit_queue_override():
         "luna": "GPT-5.6 Luna",
     }.items():
         assert parse(f"[{token}] go", "B", config)[1]["model"] == label
-
-
-def test_chunking_preserves_normal_code_blocks_and_bounds_giant_blocks():
-    code = "```python\nprint('hello')\n```"
-    parts = chunks("a" * 3880 + "\n" + code)
-    assert "".join(parts) == "a" * 3880 + "\n" + code
-    assert code in parts
-    giant = chunks("```" + "x" * 10000 + "```")
-    assert all(len(p) <= 3900 and p.startswith("```") and p.endswith("```") for p in giant)
 
 
 def test_owner_team_bot_gate_and_overlapping_slack_events(tmp_path):

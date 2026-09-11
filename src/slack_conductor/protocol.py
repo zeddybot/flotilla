@@ -49,37 +49,3 @@ def prompt_header(channel, thread_ts, message_ts, permalink, text):
         "Links with source line numbers (file.py:42 or file.py#L42) remain code references. "
         "Keep files available until delivery. Maximum 10 files, 25 MiB each.\n\n" + text
     )
-
-
-def chunks(text, limit=3900):
-    """Keep whole fenced blocks together; reopen only blocks exceeding Slack's limit."""
-    pieces = re.split(r"(```[\s\S]*?```)", text)
-    output, current = [], ""
-    for piece in pieces:
-        if not piece:
-            continue
-        if len(current) + len(piece) <= limit:
-            current += piece
-            continue
-        if current:
-            output.append(current)
-            current = ""
-        if len(piece) <= limit:
-            current = piece
-            continue
-        fenced = piece.startswith("```") and piece.endswith("```")
-        body = piece[3:-3] if fenced else piece
-        opening = "```"
-        if fenced and (info := re.match(r"([\w+-]{0,32})\n", body)):
-            opening += info[0]
-            body = body[info.end() :]
-        budget = limit - len(opening) - 4 if fenced else limit
-        while len(body) > budget:
-            cut = body.rfind("\n", 0, budget + 1)
-            cut = cut + 1 if cut > 0 else budget
-            part, body = body[:cut], body[cut:]
-            output.append(opening + part + "\n```" if fenced else part)
-        current = opening + body + "```" if fenced else body
-    if current:
-        output.append(current)
-    return output or ["Agent finished without a text reply."]

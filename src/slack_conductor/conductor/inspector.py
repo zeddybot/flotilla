@@ -1,5 +1,3 @@
-import json
-import logging
 import shutil
 import subprocess
 import time
@@ -10,8 +8,6 @@ import ApplicationServices as AX
 import Quartz
 
 from .process import incarnation
-
-log = logging.getLogger(__name__)
 
 
 def attr(element, name):
@@ -30,19 +26,16 @@ def walk(root):
             todo.extend((child, depth + 1) for child in (attr(element, "AXChildren") or []))
 
 
-def matches(element, role=None, title=None, prefix=None, description=None, url_suffix=None):
+def matches(element, role=None, title=None, description=None):
     return (
         (role is None or attr(element, "AXRole") == role)
         and (title is None or attr(element, "AXTitle") == title)
-        and (prefix is None or str(attr(element, "AXTitle") or "").startswith(prefix))
         and (description is None or attr(element, "AXDescription") == description)
-        and (url_suffix is None or str(attr(element, "AXURL") or "").endswith(url_suffix))
     )
 
 
 class Inspector:
-    def __init__(self, state_dir):
-        self.state_dir = state_dir
+    def __init__(self):
         self.pid = None
         self.app = None
 
@@ -176,31 +169,6 @@ class Inspector:
         if root is None:
             return None
         return next((e for e in walk(root) if matches(e, **selector)), None)
-
-    def require(self, root=None, **selector):
-        found = self.find(root, **selector)
-        if found is None:
-            self.snapshot()
-            raise RuntimeError(f"Conductor UI changed: {selector}")
-        return found
-
-    def snapshot(self):
-        # Omit AXValue: it contains chat text and potentially secrets.
-        rows = (
-            [
-                {
-                    key: str(attr(e, key) or "")[:200]
-                    for key in ("AXRole", "AXTitle", "AXDescription", "AXURL")
-                }
-                for e in walk(self.window())
-            ]
-            if self.window() is not None
-            else []
-        )
-        path = self.state_dir / "last-ax-tree.json"
-        path.write_text(json.dumps(rows, indent=2))
-        path.chmod(0o600)
-        log.error("Accessibility selector snapshot: %s", path)
 
     @staticmethod
     def press(element, action="AXPress"):

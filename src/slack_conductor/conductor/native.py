@@ -68,7 +68,7 @@ class Conductor:
             else Transport(config.state_dir, lambda current: incarnation() == current)
         )
         self.db = NativeDB(config.conductor_db, self.transport)
-        self.attachment = Attachment(self.transport, config.state_dir)
+        self.attachment = Attachment(self.transport)
         self.generation = None
 
     def start(self, bindings=None):

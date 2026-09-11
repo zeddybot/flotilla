@@ -1,5 +1,10 @@
 # slack-conductor
 
+> Historical specification: this records the original Accessibility-driven design.
+> The current implementation uses the [native Conductor bridge](docs/conductor-native-bridge.md).
+> Use that document for current architecture and recovery behavior, and the
+> [README](README.md) for installation and operation.
+
 A personal Slack bot that drives the **local** Conductor Mac app. `@bot` in a Slack channel or a DM creates a Conductor workspace and starts an agent turn; explicitly mentioned replies in the channel thread continue that agent (DM replies need no mention); the agent's output comes back to the thread; the session stays a normal Conductor session you can take over in the app.
 
 Everything below marked *verified* was exercised against Conductor 0.84.2 / Claude Code 2.1.257 on 2026-09-07.
