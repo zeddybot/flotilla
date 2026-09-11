@@ -6,6 +6,13 @@ from slack_conductor.presentation import pages
 MD = MarkdownIt("js-default")
 
 
+def test_normal_code_fence_moves_whole_to_next_message():
+    paragraph = "a" * 3880
+    code = "```python\nprint('hello')\n```"
+    parts = list(markdown_chunks(paragraph + "\n\n" + code))
+    assert parts == [paragraph, code]
+
+
 def test_many_short_headings_split_before_slack_expansion_limit():
     text = "\n\n".join(f"# Heading {i}" for i in range(75))
     parts = list(markdown_chunks(text))

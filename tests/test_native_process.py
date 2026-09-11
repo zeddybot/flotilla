@@ -53,23 +53,23 @@ def inspector_module(monkeypatch):
     return module
 
 
-def test_console_search_reaches_prompt_before_large_log(monkeypatch, tmp_path):
+def test_console_search_reaches_prompt_before_large_log(monkeypatch):
     module = inspector_module(monkeypatch)
     prompt = {"AXRole": "AXTextArea", "AXDescription": "Console prompt"}
     rows = [{"AXChildren": [{"AXRole": "AXStaticText"}]} for _ in range(7000)]
     root = {"AXChildren": [{"AXChildren": rows}, {"AXChildren": [prompt]}]}
     monkeypatch.setattr(module, "attr", lambda node, key: node.get(key))
-    ax = module.Inspector(tmp_path)
+    ax = module.Inspector()
     assert ax.find(root, role="AXTextArea", description="Console prompt") is prompt
     prompt["AXChildren"] = [{"AXRole": "AXStaticText", "AXValue": "unsent command"}]
     assert module.Inspector.draft(prompt) == "unsent command"
 
 
-def test_offscreen_ax_window_still_switches_and_restores_aerospace(monkeypatch, tmp_path):
+def test_offscreen_ax_window_still_switches_and_restores_aerospace(monkeypatch):
     from types import SimpleNamespace
 
     module = inspector_module(monkeypatch)
-    ax = module.Inspector(tmp_path)
+    ax = module.Inspector()
     monkeypatch.setattr(ax, "connect", lambda: None)
     monkeypatch.setattr(ax, "window", lambda: object())
     monkeypatch.setattr(module.shutil, "which", lambda _: "aerospace")
@@ -89,7 +89,7 @@ def test_offscreen_ax_window_still_switches_and_restores_aerospace(monkeypatch, 
     assert commands[0][1:4] == ["list-windows", "--monitor", "all"]
 
 
-def test_new_app_does_not_inherit_failed_attachment_backoff(monkeypatch, tmp_path):
+def test_new_app_does_not_inherit_failed_attachment_backoff(monkeypatch):
     import sys
     from types import SimpleNamespace
 
@@ -109,7 +109,7 @@ def test_new_app_does_not_inherit_failed_attachment_backoff(monkeypatch, tmp_pat
         raise RuntimeError("not ready")
 
     monkeypatch.setattr(attachment, "attach", fail)
-    worker = attachment.Attachment(SimpleNamespace(online=lambda: False), tmp_path)
+    worker = attachment.Attachment(SimpleNamespace(online=lambda: False))
     worker.stop = SimpleNamespace(
         is_set=lambda: now[0] >= 3,
         wait=lambda seconds: now.__setitem__(0, now[0] + seconds),

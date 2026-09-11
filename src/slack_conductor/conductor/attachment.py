@@ -11,10 +11,10 @@ from .process import incarnation
 log = logging.getLogger(__name__)
 
 
-def attach(transport, state_dir):
+def attach(transport):
     from .inspector import Inspector
 
-    ax = Inspector(state_dir)
+    ax = Inspector()
     front = Inspector.focused_pid()
     log.info("Attaching Conductor frontend; previous app PID %s", front)
     try:
@@ -97,8 +97,8 @@ def _attach(transport, ax):
 
 
 class Attachment:
-    def __init__(self, transport, state_dir):
-        self.transport, self.state_dir = transport, state_dir
+    def __init__(self, transport):
+        self.transport = transport
         self.stop = threading.Event()
         self.worker = threading.Thread(target=self.run, daemon=True)
 
@@ -120,7 +120,7 @@ class Attachment:
                 or (current and Inspector.focused_pid() == int(current.split(":", 1)[0]))
             ):
                 try:
-                    attach(self.transport, self.state_dir)
+                    attach(self.transport)
                     log.info("Conductor native frontend attached")
                     failures = 0
                 except Exception as exc:

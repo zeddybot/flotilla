@@ -1,1 +1,1 @@
-"""Read-only database and Accessibility adapters."""
+"""Native Conductor commands, runtime observation, and frontend attachment."""
