@@ -243,11 +243,7 @@ class Poller:
                 )
                 return
         if status["state"] == "waiting" and now - self.idle_since.get(status["id"], now) > 30:
-            queued = self.db.query(
-                "SELECT id FROM session_messages WHERE session_id=? AND role='user' "
-                "AND content=? AND sent_at IS NULL AND cancelled_at IS NULL",
-                (status["session_id"], status["prompt"]),
-            )
+            queued = self.db.pending(status["session_id"], status["prompt"])
             if not queued:
                 self.finish(
                     status,

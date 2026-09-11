@@ -123,6 +123,11 @@ class Turn:
                     )
                     if block.get("name") == "AskUserQuestion":
                         self.phase, self.detail = "attention", "answer requested in Conductor"
+                    elif block.get("name") == "ExitPlanMode":
+                        self.phase, self.detail = (
+                            "attention",
+                            "plan approval requested in Conductor",
+                        )
                     changed = True
             if not changed:
                 return False

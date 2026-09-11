@@ -279,3 +279,59 @@ def test_slack_honors_retry_after_longer_than_a_minute(monkeypatch):
     monkeypatch.setattr("slack_conductor.slack_io.time.sleep", delays.append)
     assert SlackIO(SimpleNamespace(chat_update=update)).call("chat_update", text="working")["ok"]
     assert delays == [90]
+
+
+def test_native_outbox_survives_idle_timeout_then_delivers_once(tmp_path):
+    store, conn, db, slack = fixture(tmp_path)
+    conn.execute(
+        "CREATE TABLE session_messages_outbox(message_id,session_id,delivery_payload,state)"
+    )
+    conn.execute(
+        "INSERT INTO session_messages_outbox VALUES ('queued-id','s',?,'ready')",
+        (json.dumps({"message": "retained across reload"}),),
+    )
+    conn.commit()
+    sid = status(store, "outbox", "retained across reload", send_mode="queue")
+    store.update(sid, latest="queued")
+    now = [100.0]
+    poller = Poller(store, db, slack, clock=lambda: now[0], settle_seconds=0)
+    poller.tick()
+    now[0] += 90
+    poller.tick()
+    assert store.status(sid)["state"] == "waiting"
+    assert not slack.posts
+    assert all("idle without a matching reply" not in text for _, text in slack.edits)
+    conn.execute("DELETE FROM session_messages_outbox")
+    conn.commit()
+    message(conn, "user", "retained across reload", "turn-after-reload")
+    result(conn, "queue-recovered", "turn-after-reload")
+    poller.tick()
+    now[0] += 3
+    poller.tick()
+    assert store.status(sid)["state"] == "complete"
+    assert store.status(sid)["result"] == "queue-recovered"
+    delivered = len(slack.edits)
+    poller.tick()
+    assert len(slack.edits) == delivered
+
+
+def test_pending_outbox_requires_matching_session_prompt_and_live_state(tmp_path):
+    _, conn, db, _ = fixture(tmp_path)
+    assert not db.pending("s", "target")
+    conn.execute(
+        "CREATE TABLE session_messages_outbox(message_id,session_id,delivery_payload,state)"
+    )
+    conn.executemany(
+        "INSERT INTO session_messages_outbox VALUES (?,?,?,?)",
+        [
+            ("other-session", "other", '{"message":"target"}', "ready"),
+            ("other-prompt", "s", '{"message":"different"}', "ready"),
+            ("failed", "s", '{"message":"target"}', "failed"),
+            ("bad-json", "s", "invalid", "ready"),
+            ("wrong-type", "s", "[]", "ready"),
+        ],
+    )
+    conn.commit()
+    assert not db.pending("s", "target")
+    message(conn, "user", "target", None, sent=None)
+    assert db.pending("s", "target")
