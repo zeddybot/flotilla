@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+from contextlib import ExitStack
 
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
@@ -203,14 +204,17 @@ def run(config, store, conductor, creds, stop):
     def receive(body):
         bridge.receive(body)
 
-    conductor.start(store.session_bindings())
-    # Replaying an event reuses its status, workspace intent and native message ID.
-    store.execute("UPDATE events SET state='pending' WHERE state='processing'")
-    bridge.poller.reconcile()
-    handler = SocketModeHandler(app, creds["SLACK_APP_TOKEN"])
-    health = ConnectionHealth(handler.client, stop)
-    health.start()
-    try:
+    with ExitStack() as resources:
+        conductor.start(store.session_bindings())
+        resources.callback(conductor.close)
+        # Replaying an event reuses its status, workspace intent and native message ID.
+        store.execute("UPDATE events SET state='pending' WHERE state='processing'")
+        bridge.poller.reconcile()
+        handler = SocketModeHandler(app, creds["SLACK_APP_TOKEN"])
+        resources.callback(handler.close)
+        health = ConnectionHealth(handler.client, stop)
+        health.start()
+        resources.callback(health.close)
         handler.connect()
         log.info(
             "Conductor Slack bridge connected to %s; owner %s",
@@ -230,7 +234,3 @@ def run(config, store, conductor, creds, stop):
             stop.wait(max(0.05, 1 - (time.monotonic() - started)))
         if health.failed:
             raise ConnectionError("Socket Mode stalled; launchd will restart the daemon")
-    finally:
-        health.close()
-        handler.close()
-        conductor.close()
