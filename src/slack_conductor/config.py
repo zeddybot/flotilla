@@ -23,9 +23,9 @@ class Config:
             "haiku": "Haiku 4.5",
             "fable": "Fable 5.1",
             "astra": "GPT-6 Astra",
-            "sol": "5.6 Sol",
-            "terra": "5.6 Terra",
-            "luna": "5.6 Luna",
+            "sol": "GPT-5.6 Sol",
+            "terra": "GPT-5.6 Terra",
+            "luna": "GPT-5.6 Luna",
         }
     )
 
