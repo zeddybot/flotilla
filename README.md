@@ -151,3 +151,8 @@ Quitting Conductor may kill its background shell jobs; the bridge does not rerun
 The native integration uses Conductor’s internal frontend services and validates them at attachment. App updates are allowed; an incompatible interface reports a reconnect/attachment error instead of switching to UI automation. See [the implementation and validation record](docs/conductor-native-bridge.md).
 
 `sc new`, `sc send`, and `sc archive` submit native commands through the running daemon. `sc doctor` checks its native attachment. Install/start the LaunchAgent before using those commands. The installer replaces the runtime source tree exactly, removing retired modules; `--prepare-only` builds a separate runtime without modifying the running service.
+
+## Development
+
+See [Testing and merge protection](docs/testing.md) for the component boundaries,
+behavioral coverage, focused local checks, and required-CI configuration.
