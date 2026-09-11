@@ -134,7 +134,7 @@ def test_notification_waits_until_all_final_pages_delivered(bridge_state):
     sid = status(store, "request", "task")
     poller = Poller(store, db, slack, notifications=notices)
     post = slack.post
-    slack.post = lambda *a: (_ for _ in ()).throw(TimeoutError())
+    slack.post = lambda *a, **kw: (_ for _ in ()).throw(TimeoutError())
     with pytest.raises(TimeoutError):
         poller.finish(store.status(sid), "long response " * 900)
     notices.tick()

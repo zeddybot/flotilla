@@ -185,7 +185,7 @@ Ensure window, navigate, set editor, Send. Status message as above.
 ### Poller (per active turn)
 - Tick every 1 s. Coalesce status edits to ≤1 per 1.5 s.
 - On `result`: preserve content and keep watching if jobs remain. Track terminal task notifications through the agent's resumed result under the same turn ID. Complete after a result with no outstanding jobs, no pending callback, and two seconds at rest. A later queued/user-started turn may occupy the session after this turn finishes.
-- Render every message as emoji/status, optional detail, and content. Header changes preserve the latest agent response. Long final answers use bounded continuation replies with headers.
+- Render primary replies as emoji/status, optional detail, and content. Header changes preserve the latest agent response. Long final answers use bounded continuation replies containing only content; the status header appears on the first reply.
 - If the thread's workspace hits `archived` mid-turn, update the existing message to `📦 Archived`, preserve its latest content, and stop.
 
 ### `[close]`

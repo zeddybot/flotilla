@@ -29,10 +29,12 @@ def test_headers_and_background_content_survive_state_changes():
     assert live(turn).endswith("I'll verify after deployment.")
 
 
-def test_all_long_final_parts_have_bounded_headers_and_closed_code_fences():
+def test_long_final_has_one_status_header_and_closed_code_fences():
     output = pages("done", "```python\n" + "print('hello')\n" * 1000 + "```", "<&>" * 100)
     assert len(output) > 1
-    assert all(p.startswith("✅ *Done*") and len(p) <= 3900 for p in output)
+    assert output[0].startswith("✅ *Done*")
+    assert all(p.startswith("```python\n") for p in output[1:])
+    assert all(len(p) <= 3900 for p in output)
     assert all(p.count("```") % 2 == 0 for p in output)
     assert all("```python\n" in p for p in output)
 
@@ -73,7 +75,8 @@ def test_long_code_continuations_keep_language_and_literal_contents():
         SimpleNamespace(chat_postMessage=lambda **kw: blocks.extend(kw["blocks"]) or {"ts": "2"})
     )
     for i, text in enumerate(output):
-        slack.post("C", "1", text, str(i))
+        slack.post("C", "1", text, str(i), status_header=i == 0)
+    assert sum(b["type"] == "section" for b in blocks) == 1
     bodies = [b["text"] for b in blocks if b["type"] == "markdown"]
     assert len(bodies) > 1
     assert sum(b.count('print("**literal** <tag> & value")') for b in bodies) == 400
@@ -216,14 +219,19 @@ def test_block_limit_continuations_resume_after_delivery_failure(bridge_state):
     result(conn, answer, "turn")
     original_post = slack.post
 
-    def interrupted(*args):
+    def interrupted(*args, **kwargs):
         raise RuntimeError("Slack unavailable")
 
     slack.post = interrupted
     Poller(store, db, slack, settle_seconds=0).tick()
     assert store.status(sid)["delivered"] == 1
     assert store.status(sid)["state"] == "delivering"
-    slack.post = original_post
+
+    def resumed_post(*args, **kwargs):
+        assert kwargs["status_header"] is False
+        return original_post(*args, **kwargs)
+
+    slack.post = resumed_post
     Poller(store, db, slack, settle_seconds=0).reconcile()
     assert len(slack.edits) == 1
     assert [p[2] for p in slack.posts] == pages("done", answer)[1:]

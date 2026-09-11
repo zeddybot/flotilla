@@ -81,7 +81,10 @@ def test_many_image_references_and_long_paragraphs_preserve_previews_when_split(
     text = "Before. " + "![Chart](https://slack.test/chart) Some more prose. " * 40 + "After."
     output = pages("done", text)
     assert len(output) > 1
-    rendered = [blocks(p, {"https://slack.test/chart": "F1"}) for p in output]
+    rendered = [
+        blocks(p, {"https://slack.test/chart": "F1"}, status_header=i == 0)
+        for i, p in enumerate(output)
+    ]
     assert all(len(page) <= 25 for page in rendered)
     assert sum(b["type"] == "image" for page in rendered for b in page) == 40
     assert all(len(p) <= 3900 for p in output)

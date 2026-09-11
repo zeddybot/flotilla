@@ -61,6 +61,7 @@ class Poller:
                     status["thread_ts"],
                     parts[index],
                     f"result:{status['id']}:{index}:{status['event_key']}",
+                    status_header=False,
                     **({"images": images} if images else {}),
                 )
             self.store.update(status["id"], delivered=index + 1)

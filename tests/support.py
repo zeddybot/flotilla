@@ -11,7 +11,7 @@ class Slack:
     def __init__(self):
         self.posts, self.edits, self.deletes = [], [], []
 
-    def post(self, channel, thread_ts, text, key):
+    def post(self, channel, thread_ts, text, key, *, status_header=True):
         self.posts.append((channel, thread_ts, text, key))
         return str(len(self.posts))
 
