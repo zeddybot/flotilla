@@ -7,7 +7,7 @@ from slack_conductor.presentation import render
 from slack_conductor.protocol import parse
 from slack_conductor.slack_app import Bridge
 from slack_conductor.store import Store
-from tests.support import fixture, message, result, status
+from tests.support import message, result, status
 
 
 def test_tokens_are_leading_case_insensitive_and_sticky():
@@ -39,8 +39,8 @@ def test_default_steering_and_explicit_queue_override():
         assert parse(f"[{token}] go", "B", config)[1]["model"] == label
 
 
-def test_owner_team_bot_gate_and_overlapping_slack_events(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_owner_team_bot_gate_and_overlapping_slack_events(bridge_state):
+    store, _, db, slack = bridge_state
     bridge = Bridge(Config(), store, SimpleNamespace(db=db), slack, "B", "U1", "T1")
     event = {"type": "app_mention", "channel": "C1", "ts": "1", "user": "U1", "text": "<@B> go"}
     for changes, team in [
@@ -68,11 +68,10 @@ def test_owner_team_bot_gate_and_overlapping_slack_events(tmp_path):
         }
     )
     assert len(store.rows("SELECT * FROM events")) == 1
-    conn.close()
 
 
-def test_channel_followups_require_mention_and_reuse_mapped_session(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_channel_followups_require_mention_and_reuse_mapped_session(bridge_state):
+    store, _, db, slack = bridge_state
     workspace = {"id": "w", "active_session_id": "s"}
     config = Config()
     options = parse("initial task", "B", config)[1]
@@ -109,11 +108,10 @@ def test_channel_followups_require_mention_and_reuse_mapped_session(tmp_path):
     assert sent[0][2].endswith("continue investigating")
     assert sent[0][3]["send_mode"] == "queue"
     assert store.thread("C1", "1")["session_id"] == "s"
-    conn.close()
 
 
-def test_pending_unmentioned_channel_event_is_ignored_but_dm_is_accepted(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_pending_unmentioned_channel_event_is_ignored_but_dm_is_accepted(bridge_state):
+    store, _, db, slack = bridge_state
     bridge = Bridge(Config(), store, SimpleNamespace(db=db), slack, "B", "U1", "T1")
     event = {
         "type": "message",
@@ -130,11 +128,10 @@ def test_pending_unmentioned_channel_event_is_ignored_but_dm_is_accepted(tmp_pat
     assert not slack.posts and not store.rows("SELECT * FROM statuses")
     bridge.receive({"team_id": "T1", "event": event | {"channel_type": "im", "channel": "D1"}})
     assert store.next_event() is not None
-    conn.close()
 
 
-def test_restart_picks_up_queued_row_updated_below_cursor_and_ignores_ui_turn(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_restart_picks_up_queued_row_updated_below_cursor_and_ignores_ui_turn(bridge_state):
+    store, conn, db, slack = bridge_state
     message(conn, "user", "slack-prompt", None, sent=None)
     message(conn, "user", "typed-in-conductor", "ui-turn")
     result(conn, "private-ui-output", "ui-turn")
@@ -151,11 +148,10 @@ def test_restart_picks_up_queued_row_updated_below_cursor_and_ignores_ui_turn(tm
     count = len(slack.edits)
     restarted.tick()
     assert len(slack.edits) == count
-    conn.close()
 
 
-def test_steering_handoff_only_posts_one_result(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_steering_handoff_only_posts_one_result(bridge_state):
+    store, conn, db, slack = bridge_state
     first, second = status(store, "e1", "first"), status(store, "e2", "second")
     message(conn, "user", "first", "turn")
     message(conn, "user", "second", "turn")
@@ -167,11 +163,10 @@ def test_steering_handoff_only_posts_one_result(tmp_path):
     assert store.status(second)["status_ts"] == "status-2"
     assert all(ts == "status-2" for ts, _ in slack.edits)
     assert slack.edits[-1] == ("status-2", render("done", "done"))
-    conn.close()
 
 
-def test_separate_queued_turns_both_deliver(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_separate_queued_turns_both_deliver(bridge_state):
+    store, conn, db, slack = bridge_state
     status(store, "e1", "first")
     status(store, "e2", "second")
     message(conn, "user", "first", "t1")
@@ -184,7 +179,6 @@ def test_separate_queued_turns_both_deliver(tmp_path):
         ("status-2", render("done", "second-result")),
     ]
     assert not slack.deletes
-    conn.close()
 
 
 def test_slack_honors_retry_after_longer_than_a_minute(monkeypatch):
@@ -215,8 +209,8 @@ def test_slack_honors_retry_after_longer_than_a_minute(monkeypatch):
     assert delays == [90]
 
 
-def test_native_outbox_survives_idle_timeout_then_delivers_once(tmp_path):
-    store, conn, db, slack = fixture(tmp_path)
+def test_native_outbox_survives_idle_timeout_then_delivers_once(bridge_state):
+    store, conn, db, slack = bridge_state
     conn.execute(
         "CREATE TABLE session_messages_outbox(message_id,session_id,delivery_payload,state)"
     )
@@ -249,8 +243,8 @@ def test_native_outbox_survives_idle_timeout_then_delivers_once(tmp_path):
     assert len(slack.edits) == delivered
 
 
-def test_pending_outbox_requires_matching_session_prompt_and_live_state(tmp_path):
-    _, conn, db, _ = fixture(tmp_path)
+def test_pending_outbox_requires_matching_session_prompt_and_live_state(bridge_state):
+    _, conn, db, _ = bridge_state
     assert not db.pending("s", "target")
     conn.execute(
         "CREATE TABLE session_messages_outbox(message_id,session_id,delivery_payload,state)"

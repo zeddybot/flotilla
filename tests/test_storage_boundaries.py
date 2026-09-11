@@ -1,6 +1,7 @@
 """Storage contracts stay meaningful if a future client supplies the observations."""
 
 import sqlite3
+from contextlib import closing
 
 from slack_conductor.conductor.db import ConductorDB
 from slack_conductor.conductor.journal import Journal
@@ -31,7 +32,7 @@ def test_pending_native_prompt_is_session_scoped_and_survives_restart(tmp_path):
 
 def test_turn_observations_ignore_unsent_and_other_session_messages(tmp_path):
     path = tmp_path / "conductor.db"
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         conn.execute("CREATE TABLE session_messages(session_id,role,turn_id,sent_at,cancelled_at)")
         conn.executemany(
             "INSERT INTO session_messages VALUES (?,?,?,?,?)",
@@ -46,7 +47,7 @@ def test_turn_observations_ignore_unsent_and_other_session_messages(tmp_path):
     assert db.latest_turn("s") == "original"
     assert not db.has_later_turn("s", 1, "original")
     assert db.latest_turn("missing") is None
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         conn.execute("UPDATE session_messages SET sent_at='later' WHERE turn_id='queued'")
     assert db.latest_turn("s") == "queued"
     assert db.has_later_turn("s", 1, "original")
