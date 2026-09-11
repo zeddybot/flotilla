@@ -190,11 +190,8 @@ class Poller:
                 status["cursor"] = row["seq"]
             # A queued/user-started next turn can occupy the session while this
             # turn is already at rest. Its output must remain separate.
-            later_turn = turn.result_seq and self.db.query(
-                "SELECT rowid FROM session_messages WHERE session_id=? AND rowid>? "
-                "AND role='user' AND sent_at IS NOT NULL AND turn_id IS NOT NULL "
-                "AND turn_id!=? LIMIT 1",
-                (status["session_id"], turn.result_seq, status["turn_id"]),
+            later_turn = turn.result_seq and self.db.has_later_turn(
+                status["session_id"], turn.result_seq, status["turn_id"]
             )
             ready = turn.ready(
                 now, session["status"] == "idle" or bool(later_turn), self.settle_seconds
@@ -205,12 +202,8 @@ class Poller:
                 "needs_plan_response": "plan approval requested in Conductor",
             }
             if session["status"] in blocked and not turn.result_seq:
-                current = self.db.query(
-                    "SELECT turn_id FROM session_messages WHERE session_id=? AND role='user' "
-                    "AND sent_at IS NOT NULL AND cancelled_at IS NULL ORDER BY rowid DESC LIMIT 1",
-                    (status["session_id"],),
-                )
-                if current and current[0]["turn_id"] in {status["turn_id"], turn.callback_turn_id}:
+                current = self.db.latest_turn(status["session_id"])
+                if current and current in {status["turn_id"], turn.callback_turn_id}:
                     turn.phase, turn.detail = "attention", blocked[session["status"]]
             status["latest"] = (
                 f"waiting for {len(turn.tasks)} background job(s)"

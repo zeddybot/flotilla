@@ -148,6 +148,18 @@ class Journal:
                 )
             return state
 
+    def pending_prompt(self, sid, prompt):
+        with self.connect() as connection:
+            return (
+                connection.execute(
+                    "SELECT 1 FROM commands WHERE state!='done' "
+                    "AND json_extract(body,'$.op')='send' "
+                    "AND json_extract(body,'$.sid')=? AND json_extract(body,'$.prompt')=?",
+                    (sid, prompt),
+                ).fetchone()
+                is not None
+            )
+
     def pause_state(self, sid):
         with self.connect() as c:
             row = c.execute("SELECT * FROM pauses WHERE session_id=?", (sid,)).fetchone()

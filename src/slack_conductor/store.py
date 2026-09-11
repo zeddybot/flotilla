@@ -90,6 +90,14 @@ class Store:
         )
         return rows[0] if rows else None
 
+    def session_bindings(self):
+        return {
+            row["session_id"]: row["workspace_id"]
+            for row in self.rows(
+                "SELECT session_id,workspace_id FROM threads WHERE state!='archived'"
+            )
+        }
+
     def thread(self, channel, ts):
         rows = self.rows("SELECT * FROM threads WHERE channel=? AND thread_ts=?", (channel, ts))
         return rows[0] if rows else None
