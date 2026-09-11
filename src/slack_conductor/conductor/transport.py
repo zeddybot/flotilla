@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from .journal import Journal
+from .runtime import session_snapshot
 
 
 class Transport:
@@ -54,9 +55,11 @@ class Transport:
                     return
                 try:
                     size = int(self.headers.get("Content-Length", "0"))
-                    if size > 2_000_000:
-                        raise ValueError("Request too large")
+                    if not 0 <= size <= 2_000_000:
+                        raise ValueError("Invalid request size")
                     body = json.loads(self.rfile.read(size)) if post else {}
+                    if not isinstance(body, dict):
+                        raise TypeError("Request must be an object")
                     generation = (
                         body.get("generation")
                         if post
@@ -150,12 +153,12 @@ class Transport:
             )
 
     def session(self, sid):
-        if not self.online():
-            return None
-        value = self.heartbeat.get("sessions", {}).get(sid)
-        if value and time.time() - value.get("at", 0) < 5:
-            return {**value, "incarnation": self.attachment["incarnation"]}
-        return None
+        with self.lock:
+            if not self.online():
+                return None
+            return session_snapshot(
+                {**self.heartbeat, "incarnation": self.attachment["incarnation"]}, sid
+            )
 
     def call(self, body, key=None, timeout=30):
         key = key or str(uuid.uuid4())

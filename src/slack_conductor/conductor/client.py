@@ -6,6 +6,8 @@ import time
 import uuid
 
 from .journal import Journal
+from .process import incarnation
+from .runtime import fresh, session_snapshot
 
 
 class Client:
@@ -31,14 +33,17 @@ class Client:
             value = json.loads((self.state_dir / "native-heartbeat.json").read_text())
         except (ValueError, FileNotFoundError):
             return {}
-        return value if time.time() - value.get("at", 0) < 5 else {}
+        if (
+            not isinstance(value, dict)
+            or not fresh(value.get("at"), time.time())
+            or not value.get("ready")
+            or value.get("incarnation") != incarnation()
+        ):
+            return {}
+        return value
 
     def online(self):
         return bool(self.snapshot().get("ready"))
 
     def session(self, sid):
-        snapshot = self.snapshot()
-        value = snapshot.get("sessions", {}).get(sid)
-        if value and time.time() - value.get("at", 0) < 5:
-            return {**value, "incarnation": snapshot["incarnation"]}
-        return None
+        return session_snapshot(self.snapshot(), sid)
