@@ -150,7 +150,7 @@ def test_notification_waits_until_all_final_pages_delivered(tmp_path):
     conn.close()
 
 
-def test_startup_delivers_pending_dm_without_touching_conductor_ui(tmp_path, monkeypatch):
+def test_startup_delivers_pending_dm_without_dispatching_agent_work(tmp_path, monkeypatch):
     store, conn, db, slack = fixture(tmp_path)
     notices, sent = attach(store, slack)
     sid = status(store, "request", "task")
@@ -184,7 +184,7 @@ def test_startup_delivers_pending_dm_without_touching_conductor_ui(tmp_path, mon
     slack_app.run(
         Config(),
         store,
-        SimpleNamespace(db=db),
+        SimpleNamespace(db=db, start=lambda _: None, close=lambda: None),
         {
             "SLACK_BOT_TOKEN": "test",
             "SLACK_APP_TOKEN": "test",

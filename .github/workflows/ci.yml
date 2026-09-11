@@ -1,18 +1,67 @@
 name: ci
-on: [push, pull_request]
+on:
+  pull_request:
+  push:
+    branches: [main, 'gtmq_*']
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  bridge:
-    runs-on: ubuntu-latest
+  tests:
+    name: tests (${{ matrix.os }}, python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, python: '3.12'}
+          - {os: ubuntu-latest, python: '3.14'}
+          - {os: macos-latest, python: '3.12'}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - run: uv sync --frozen
-      - run: uv run pytest tests/test_db.py tests/test_bridge.py tests/test_service.py tests/test_lifecycle.py tests/test_presentation.py tests/test_connection_health.py tests/test_markdown.py -q
-      - run: uv run pytest tests/test_native_journal.py tests/test_native_process.py tests/test_native_frontend.py tests/test_native_adapter.py tests/test_native_recovery.py -q
-      - run: uv run pytest tests/test_file_links.py -q
-      - run: uv run pytest tests/test_uploads.py -q
-      - run: uv run pytest tests/test_file_delivery.py -q
+      - run: uv run pytest --strict-markers --strict-config --cov=slack_conductor --cov-report=term-missing --cov-report=xml --junitxml=test-results.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tests-${{ matrix.os }}-${{ matrix.python }}
+          path: |
+            coverage.xml
+            test-results.xml
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
       - run: uv run ruff check src tests scripts
       - run: uv run ruff format --check src tests scripts
+
+  gate:
+    name: CI
+    if: always()
+    needs: [tests, lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require every job to succeed
+        env:
+          TESTS: ${{ needs.tests.result }}
+          LINT: ${{ needs.lint.result }}
+        run: test "$TESTS" = success && test "$LINT" = success
