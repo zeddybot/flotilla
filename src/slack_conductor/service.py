@@ -3,11 +3,21 @@ import logging
 import os
 import signal
 import threading
+import time
 from logging.handlers import RotatingFileHandler
 
 from .config import credentials
 from .slack_app import run
 from .store import Store
+
+
+def enforce_shutdown(stop, *, timeout=30, exit_process=os._exit):
+    """Give cleanup a grace period, then release launchd even if SDK threads hang."""
+    stop.wait()
+    time.sleep(timeout)
+    # Do not use sys.exit: it exits only this thread. Keep this guard alive until
+    # process exit, including interpreter shutdown waiting for non-daemon workers.
+    exit_process(1)
 
 
 def daemon(root, config, conductor):
@@ -25,10 +35,14 @@ def daemon(root, config, conductor):
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
+    threading.Thread(
+        target=enforce_shutdown, args=(stop,), name="shutdown-deadline", daemon=True
+    ).start()
     try:
         run(config, Store(config.state_dir / "bridge.sqlite"), conductor, credentials(root), stop)
     except Exception:
         logging.getLogger(__name__).exception("Daemon stopped")
         raise
     finally:
+        stop.set()
         lock.close()
