@@ -7,7 +7,7 @@ from urllib.parse import quote
 from .ax import Accessibility, attr, walk
 from .composer import prepare_prompt
 from .db import ConductorDB
-from .selectors import is_queued_prompt, model_menu_label, model_picker_label
+from .selectors import is_queued_prompt, model_identity, model_menu_label, model_picker_label
 
 EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultracode")
 
@@ -92,9 +92,9 @@ class Conductor:
 
     def options(self, sid, options):
         warnings = []
-        model = options["model"]
+        model = model_identity(options["model"])
         picker = self.ax.require(self.ax.composer(), role="AXPopUpButton", prefix="Change agent (")
-        if model_picker_label(attr(picker, "AXTitle")) != model:
+        if model_identity(model_picker_label(attr(picker, "AXTitle"))) != model:
             self.ax.press(picker)
             time.sleep(0.15)
 
@@ -104,7 +104,8 @@ class Conductor:
                         e
                         for e in walk(self.ax.window())
                         if attr(e, "AXRole") == "AXMenuItem"
-                        and model_menu_label(attr(e, "AXTitle")) == label
+                        and model_identity(model_menu_label(attr(e, "AXTitle")))
+                        == model_identity(label)
                     ),
                     None,
                 )
@@ -176,7 +177,7 @@ class Conductor:
         picker = self.ax.require(self.ax.composer(), role="AXPopUpButton", prefix="Change agent (")
         label = model_picker_label(attr(picker, "AXTitle"))
         if (
-            label != model
+            model_identity(label) != model
             or actual_effort != options["effort"]
             or bool(actual["fast_mode"]) != bool(options["fast"])
         ):

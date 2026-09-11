@@ -1,6 +1,13 @@
 import re
 
 
+def model_identity(label):
+    """Accept the pre-0.85 names retained in configuration and saved threads."""
+    if label in {"5.6 Sol", "5.6 Terra", "5.6 Luna"}:
+        return f"GPT-{label}"
+    return label
+
+
 def model_picker_label(title):
     """Conductor 0.85 appends the effort to the selected model's button label."""
     label = str(title or "").removeprefix("Change agent (").removesuffix(")")

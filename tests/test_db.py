@@ -6,6 +6,7 @@ import pytest
 from slack_conductor.conductor.db import ConductorDB, classify
 from slack_conductor.conductor.selectors import (
     is_queued_prompt,
+    model_identity,
     model_menu_label,
     model_picker_label,
 )
@@ -35,6 +36,17 @@ def test_model_menu_effort_preserves_context_and_new_chat_warning():
     assert model_menu_label("Fable 5.1 High") == "Fable 5.1"
     assert model_menu_label("Sonnet 5 1M Low") == "Sonnet 5 1M"
     assert model_menu_label("GPT-5.6 Sol High Opens in new chat") != "GPT-5.6 Sol"
+
+
+@pytest.mark.parametrize("name", ["Sol", "Terra", "Luna"])
+def test_model_identity_accepts_legacy_names_without_losing_new_chat_warning(name):
+    legacy = f"5.6 {name}"
+    current = f"GPT-{legacy}"
+    assert model_identity(legacy) == model_identity(current)
+    assert model_identity(model_menu_label(f"{current} High")) == model_identity(legacy)
+    assert model_identity(model_picker_label(f"Change agent ({legacy} · High)")) == current
+    assert model_identity(model_menu_label(f"{current} High Opens in new chat")) != current
+    assert model_identity(f"{legacy} preview") != current
 
 
 def test_multiline_slack_prompt_matches_flattened_queue_label():
