@@ -203,7 +203,7 @@ def run(config, store, conductor, creds, stop):
     def receive(body):
         bridge.receive(body)
 
-    conductor.start(store)
+    conductor.start(store.session_bindings())
     # Replaying an event reuses its status, workspace intent and native message ID.
     store.execute("UPDATE events SET state='pending' WHERE state='processing'")
     bridge.poller.reconcile()

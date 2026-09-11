@@ -5,11 +5,12 @@ import time
 import uuid
 from pathlib import Path
 
-from .attachment import Attachment, incarnation
+from .attachment import Attachment
 from .client import Client
 from .db import ConductorDB
 from .journal import Unconfirmed
 from .models import configuration, model_id
+from .process import incarnation
 from .transport import Transport
 
 
@@ -55,13 +56,7 @@ class NativeDB(ConductorDB):
     def pending(self, sid, prompt):
         if super().pending(sid, prompt):
             return True
-        with self.transport.journal.connect() as c:
-            return bool(
-                c.execute(
-                    "SELECT 1 FROM commands WHERE state!='done' AND json_extract(body,'$.sid')=? AND json_extract(body,'$.prompt')=?",
-                    (sid, prompt),
-                ).fetchone()
-            )
+        return self.transport.journal.pending_prompt(sid, prompt)
 
 
 class Conductor:
@@ -75,17 +70,10 @@ class Conductor:
         self.db = NativeDB(config.conductor_db, self.transport)
         self.attachment = Attachment(self.transport, config.state_dir)
         self.generation = None
-        self.store = None
 
-    def start(self, store=None):
-        self.store = store
-        if store:
-            self.transport.bindings.update(
-                {
-                    r["session_id"]: r["workspace_id"]
-                    for r in store.rows("SELECT * FROM threads WHERE state!='archived'")
-                }
-            )
+    def start(self, bindings=None):
+        """Restore session ownership without knowing how the caller persists it."""
+        self.transport.bindings.update(bindings or {})
         self.transport.start()
         self.attachment.start()
 

@@ -40,6 +40,25 @@ class ConductorDB:
             (sid, after),
         )
 
+    def has_later_turn(self, sid, after, own_turn):
+        """Whether a sent user message has started another turn after this result."""
+        return bool(
+            self.query(
+                "SELECT rowid FROM session_messages WHERE session_id=? AND rowid>? "
+                "AND role='user' AND sent_at IS NOT NULL AND turn_id IS NOT NULL "
+                "AND turn_id!=? LIMIT 1",
+                (sid, after, own_turn),
+            )
+        )
+
+    def latest_turn(self, sid):
+        rows = self.query(
+            "SELECT turn_id FROM session_messages WHERE session_id=? AND role='user' "
+            "AND sent_at IS NOT NULL AND cancelled_at IS NULL ORDER BY rowid DESC LIMIT 1",
+            (sid,),
+        )
+        return rows[0]["turn_id"] if rows else None
+
     def pickup(self, sid, prompt):
         rows = self.query(
             "SELECT rowid AS seq,* FROM session_messages WHERE session_id=? "
