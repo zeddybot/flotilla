@@ -21,7 +21,8 @@ class ConductorDB:
         return rows[0]
 
     def workspace(self, wid):
-        return self.one("SELECT * FROM workspaces WHERE id=?", (wid,))
+        # Bridge identities are local; Conductor's separate id can identify a remote workspace.
+        return self.one("SELECT local_id AS id,* FROM workspaces WHERE local_id=?", (wid,))
 
     def session(self, sid):
         return self.one("SELECT * FROM sessions WHERE id=?", (sid,))

@@ -16,7 +16,7 @@ def bridge_state(tmp_path):
     conn = sqlite3.connect(path)
     try:
         conn.executescript("""
-          CREATE TABLE workspaces(id,state);
+          CREATE TABLE workspaces(local_id,state);
           INSERT INTO workspaces VALUES ('w','ready');
           CREATE TABLE sessions(id,status);
           INSERT INTO sessions VALUES ('s','idle');

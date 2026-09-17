@@ -3,10 +3,11 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 const applied = [], calls = [], commands = [], sent = [], configured = [];
+const watched = [], created = [], selected = [], archived = [];
 let intent = {paused: false}, release, block = false, reject = false;
 const composer = {
-  state: {sessions: {s: {paused: false}}},
-  watchSession: async () => ({cancel() {}}), refresh: async () => {},
+  state: {state: {sessions: {s: {paused: false}}}},
+  watchSession: async args => {watched.push(args); return {cancel() {}};}, refresh: async () => {},
   getDraftAttachments() {},
   async setPaused(args) { applied.push(args.paused); return {ok: true}; },
   async sendMessage(args) { sent.push(args); return {ok: true}; }
@@ -14,11 +15,14 @@ const composer = {
 const original = composer.setPaused;
 const testExports = {
   workspace: {
-    getWorkspace: async () => ({id: 'w', state: 'ready', activeSessionId: 's'}),
-    getWorkspaces: async () => [], createWorkspaceWithSetup() {},
+    getWorkspace: async wid => wid === 'new' ? undefined : ({id: 'remote-w', localId: 'w', state: 'ready', activeSessionId: 's'}),
+    getWorkspaces: async () => [],
+    createWorkspaceWithSetup(args) {created.push(args); return true;},
+    setActiveSessionId(args) {selected.push(args); return true;},
+    archiveWorkspace(args) {archived.push(args); return true;},
     dependencies: {repo: {getRepos: async () => []}}
   },
-  session: {getSession: async sid => ({workspaceId: sid === 'foreign' ? 'elsewhere' : 'w'}),
+  session: {getSession: async sid => ({localWorkspaceId: sid === 'foreign' ? 'elsewhere' : 'w'}),
     updateSessionModelConfiguration(args) { configured.push(args); return true; }},
   composer,
   sidecar: {getSessionStatus: async () => ({status: 'idle'}), query() {}, resolveToolApproval() {}}
@@ -67,12 +71,20 @@ try {
   await pause;
   await until(() => calls.some(c => c.route === 'result' && c.body.id === 'restore'));
   assert.deepEqual(applied, [true, true]); // recovery respects latest intent
+  assert.equal(watched[0].localWorkspaceId, 'w');
+  assert.equal(watched[0].workspaceId, undefined);
   const dispatch = async (id, body) => {
     commands.push({id, body});
     await until(() => calls.some(c => c.route === 'result' && c.body.id === id));
     return calls.find(c => c.route === 'result' && c.body.id === id).body;
   };
   const configuration = {model: 'gpt-6-astra', agent: 'codex', thinkingLevel: 'high', fastMode: true};
+  await dispatch('create', {op: 'create', wid: 'new', args: {localWorkspaceId: 'new'}});
+  assert.equal(created[0].localWorkspaceId, 'new');
+  await dispatch('select', {op: 'createdSession', wid: 'w', sid: 's'});
+  assert.equal(selected[0].localWorkspaceId, 'w');
+  assert.equal(selected[0].workspaceId, undefined);
+  assert.equal(selected[0].activeSessionId, 's');
   assert.equal((await dispatch('configure', {op: 'configure', wid: 'w', sid: 's', configuration})).value, true);
   assert.equal(configured.length, 1);
   assert.equal(configured[0].sessionId, 's');
@@ -82,6 +94,8 @@ try {
     assert.equal(result.value.ok, true);
     assert.equal(sent.at(-1).mode, mode);
     assert.equal(sent.at(-1).sessionId, 's');
+    assert.equal(sent.at(-1).localWorkspaceId, 'w');
+    assert.equal(sent.at(-1).workspaceId, undefined);
     assert.equal(sent.at(-1).messageId, mode);
     assert.equal(sent.at(-1).message, 'hello');
   }
@@ -89,6 +103,12 @@ try {
   const invalid = await dispatch('foreign', {op: 'send', wid: 'w', sid: 'foreign', message_id: 'bad', mode: 'steer', prompt: 'wrong session'});
   assert.match(invalid.error, /target changed/);
   assert.equal(sent.length, before);
+  await until(() => context.window.__flotilla.sessions.s);
+  assert.equal(context.window.__flotilla.sessions.s.paused, false);
+  await dispatch('archive', {op: 'archive', wid: 'w', sid: 's'});
+  assert.equal(archived[0].localWorkspaceId, 'w');
+  assert.equal(archived[0].workspaceId, undefined);
+  assert.equal(archived[0].stopRunningAgents, true);
   // Unbound desktop sessions are not intercepted or made dependent on the bridge.
   const recorded = calls.filter(c => c.route === 'pause').length;
   await composer.sendMessage({sessionId: 'desktop', message: 'local'});

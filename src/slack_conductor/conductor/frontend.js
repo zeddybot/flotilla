@@ -66,9 +66,9 @@
   };
   const bind = async (wid, sid) => {
     const w = await workspace.getWorkspace(wid), s = await session.getSession(sid);
-    if (!w || !s || s.workspaceId !== wid || w.state === 'archived') throw Error('Conductor target changed');
+    if (!w || !s || s.localWorkspaceId !== wid || w.state === 'archived') throw Error('Conductor target changed');
     p.bindings[sid] = wid;
-    if (!p.watches[sid]) p.watches[sid] = await composer.watchSession({workspaceId: wid, sessionId: sid});
+    if (!p.watches[sid]) p.watches[sid] = await composer.watchSession({localWorkspaceId: wid, sessionId: sid});
     await composer.refresh({sessionId: sid});
     return s;
   };
@@ -85,11 +85,11 @@
       const w = await workspace.getWorkspace(c.wid);
       if (w.state === 'archived') return true;
       await bind(c.wid, c.sid);
-      return workspace.archiveWorkspace({workspaceId: c.wid, mode: 'safe', stopRunningAgents: true});
+      return workspace.archiveWorkspace({localWorkspaceId: c.wid, mode: 'safe', stopRunningAgents: true});
     }
     await bind(c.wid, c.sid);
     await lease();
-    if (c.op === 'createdSession') return workspace.setActiveSessionId({workspaceId: c.wid, activeSessionId: c.sid});
+    if (c.op === 'createdSession') return workspace.setActiveSessionId({localWorkspaceId: c.wid, activeSessionId: c.sid});
     if (c.op === 'configure') return session.updateSessionModelConfiguration({sessionId: c.sid, configuration: c.configuration});
     if (c.op === 'watch') return serial(c.sid, async () => {
       const intent = await request('pause?sid=' + encodeURIComponent(c.sid));
@@ -103,7 +103,7 @@
       if (intent.paused) return {deferred: true};
       await lease();
       return originalSend.call(composer, {
-        workspaceId: c.wid, sessionId: c.sid, messageId: c.message_id,
+        localWorkspaceId: c.wid, sessionId: c.sid, messageId: c.message_id,
         mode: c.mode, message: c.prompt, attachmentIds: []
       });
     });
@@ -124,7 +124,7 @@
       await Promise.all(Object.keys(p.bindings).map(async sid => {
         try {
           const live = await sidecar.getSessionStatus({id: sid});
-          p.sessions[sid] = {live, paused: composer.state.sessions[sid]?.paused, at: Date.now() / 1000};
+          p.sessions[sid] = {live, paused: composer.state.state.sessions[sid]?.paused, at: Date.now() / 1000};
         } catch { delete p.sessions[sid]; }
       }));
     } finally { p.reading = false; }
