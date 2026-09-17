@@ -202,6 +202,7 @@ def test_recovered_creation_uses_original_workspace_and_session(tmp_path):
         ("sol", "gpt-5.6-sol", "codex"),
         ("terra", "gpt-5.6-terra", "codex"),
         ("luna", "gpt-5.6-luna", "codex"),
+        ("alpha", "opencode:opencode/union-alpha", "acp"),
     ],
 )
 def test_configured_aliases_select_the_expected_engine_and_model(alias, expected, agent):
@@ -212,6 +213,16 @@ def test_configured_aliases_select_the_expected_engine_and_model(alias, expected
     assert not warning
     assert config["model"] == expected
     assert config["agent"] == agent
+
+
+def test_alpha_uses_provider_defaults_for_effort_and_rejects_fast_mode():
+    from slack_conductor.protocol import parse
+
+    text, options, _ = parse("[alpha][max][fast] investigate", "bot", Config())
+    config, warning = configuration(options, "Fable 5.1")
+    assert text == "investigate"
+    assert config == {"agent": "acp", "model": "opencode:opencode/union-alpha", "fastMode": False}
+    assert warning == "fast mode unavailable; using standard speed"
 
 
 def test_unsupported_settings_keep_default_model_fallback():

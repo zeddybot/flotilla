@@ -9,6 +9,7 @@ MODELS = {
     "GPT-5.6 Sol": "gpt-5.6-sol",
     "GPT-5.6 Terra": "gpt-5.6-terra",
     "GPT-5.6 Luna": "gpt-5.6-luna",
+    "Union Alpha Free": "opencode:opencode/union-alpha",
 }
 
 
@@ -30,7 +31,7 @@ def configuration(options, default):
     elif model in ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"):
         levels.append("ultra")
     effort = options["effort"]
-    if model == "haiku-4-5":
+    if model == "haiku-4-5" or model.startswith("opencode:"):
         effort = None
     elif effort not in levels:
         warnings.append(f"effort {effort} unavailable; using high")
@@ -38,8 +39,15 @@ def configuration(options, default):
     fast = options["fast"] and (model.startswith("gpt-") or model == "opus-5-1m")
     if options["fast"] and not fast:
         warnings.append("fast mode unavailable; using standard speed")
+    agent = (
+        "acp"
+        if model.startswith("opencode:")
+        else "codex"
+        if model.startswith("gpt-")
+        else "claude"
+    )
     return {
-        "agent": "codex" if model.startswith("gpt-") else "claude",
+        "agent": agent,
         "model": model,
         **({"thinkingLevel": effort} if effort else {}),
         "fastMode": fast,

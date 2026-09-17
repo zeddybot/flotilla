@@ -67,7 +67,9 @@ Invite **Conductor** to the channel first, then:
 @Conductor [new] start a fresh workspace for the next task
 ```
 
-The defaults are Fable 5.1, high effort, and steering. A follow-up while the agent is working goes into its running turn; `[queue]` waits and starts a separate turn afterward. An idle agent starts either kind immediately. The model tokens select Conductor's current picker labels: `[astra]` → GPT-6 Astra, `[sol]` → 5.6 Sol, `[terra]` → 5.6 Terra, `[luna]` → 5.6 Luna, and `[sonnet]` → Sonnet 5 1M.
+The defaults are Fable 5.1, high effort, and steering. A follow-up while the agent is working goes into its running turn; `[queue]` waits and starts a separate turn afterward. An idle agent starts either kind immediately. Model tokens include `[astra]` → GPT-6 Astra, `[sol]` → 5.6 Sol, `[terra]` → 5.6 Terra, `[luna]` → 5.6 Luna, `[sonnet]` → Sonnet 5 1M, and `[alpha]` → OpenCode Zen's Union Alpha Free. Alpha uses Conductor's OpenCode integration through ACP, independent of picker favorites; effort uses the provider default and fast mode is unavailable. Add `alpha = "Union Alpha Free"` to `[models]` in an existing local `config.toml` to enable the alias there.
+
+The prompt encourages agents to @mention people they address directly or need action from, using real Slack user IDs from the thread or Slack tools. The relevant person may be someone other than the dispatcher.
 
 The tokens must lead the prompt, after an optional bot mention. Model, effort, and fast mode are configured when a session starts; use `[new]` to change them. Verbose and send mode are sticky in each Slack thread: after `[queue]`, use `[steer]` to return that thread to steering. Model/effort/fast selection is best effort; mismatches appear in the status. Unknown bracket tokens remain prompt text. `[close]` archives the mapped workspace and may stop its running agent. `[new]` maps the thread to a new workspace; any older active turn still delivers its own result.
 
