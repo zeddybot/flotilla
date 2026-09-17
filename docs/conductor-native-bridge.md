@@ -47,6 +47,26 @@ replacement can claim them, including records from older versions.
 The local CLI shares the daemon's native command journal instead of attaching a
 second controller. No special opt-in setting selects the native path.
 
+### Conductor 0.86 compatibility and watch recovery
+
+The 0.86 frontend uses `localWorkspaceId` for session ownership and workspace
+operations. Its composer snapshot is at `composer.state.state.sessions`. SQLite
+workspace lookup uses `workspaces.local_id`; `sessions.workspace_id` still stores
+that local identity. The adapter exposes the local identity as its workspace `id`
+so Slack bindings do not depend on Conductor's separate remote workspace ID.
+
+The old session field rejected valid bindings on startup, and the uncaught error
+caused launchd to restart the daemon repeatedly. Reattachment now isolates failures
+per session, retries confirmed failures after 30 seconds, and preserves the command
+identity for unconfirmed outcomes. Healthy sessions remain usable. Only validated
+watches publish snapshots, so an invalid binding stays disconnected rather than
+appearing idle. No failed watch is redirected to the selected desktop chat.
+
+Validated on 0.86.0 on September 17, 2026: existing session watches, a new Luna
+session through Slack DMs, queue and steer follow-ups in the same session, final
+Done updates, and `[close]`. Regression tests also cover missing/archived records,
+cached command errors, acknowledgement loss, and generation replacement.
+
 ## Delivery and identity
 
 Incoming Slack events remain durable while Conductor is unavailable. Creation uses
