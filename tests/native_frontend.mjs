@@ -48,7 +48,7 @@ const context = {
   }
 };
 const source = fs.readFileSync(new URL('../src/slack_conductor/conductor/frontend.js', import.meta.url), 'utf8')
-  .replace('__CONFIG__', JSON.stringify({base: 'http://localhost/token', generation: 'g', bindings: {s: 'w'}}))
+  .replace('__CONFIG__', JSON.stringify({base: 'http://localhost/token', generation: 'g', bindings: {s: 'w', foreign: 'w'}}))
   .replace('await import(script.src)', 'testExports');
 const installation = vm.runInNewContext(source, context);
 const until = async predicate => {
@@ -105,6 +105,8 @@ try {
   assert.equal(sent.length, before);
   await until(() => context.window.__flotilla.sessions.s);
   assert.equal(context.window.__flotilla.sessions.s.paused, false);
+  assert.equal(context.window.__flotilla.sessions.foreign, undefined);
+  assert.equal(context.window.__flotilla.watches.foreign, undefined);
   await dispatch('archive', {op: 'archive', wid: 'w', sid: 's'});
   assert.equal(archived[0].localWorkspaceId, 'w');
   assert.equal(archived[0].workspaceId, undefined);

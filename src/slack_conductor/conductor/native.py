@@ -1,8 +1,11 @@
 """Conductor's native services are the sole agent-control path."""
 
 import json
+import logging
+import sqlite3
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 from .attachment import Attachment
@@ -12,6 +15,15 @@ from .journal import Unconfirmed
 from .models import configuration, model_id
 from .process import incarnation
 from .transport import Transport
+
+log = logging.getLogger(__name__)
+
+
+@dataclass
+class Watch:
+    key: str | None = None
+    retry_at: float = 0
+    ready: bool = False
 
 
 def identity(value):
@@ -70,6 +82,7 @@ class Conductor:
         self.db = NativeDB(config.conductor_db, self.transport)
         self.attachment = Attachment(self.transport)
         self.generation = None
+        self.watches = {}
 
     def start(self, bindings=None):
         """Restore session ownership without knowing how the caller persists it."""
@@ -93,14 +106,33 @@ class Conductor:
         generation = self.transport.attachment["generation"]
         self.transport.journal.reconnect(generation, self.db)
         if generation != self.generation:
-            for sid, wid in list(self.transport.bindings.items()):
+            self.watches.clear()
+            self.generation = generation
+        for sid, wid in list(self.transport.bindings.items()):
+            watch = self.watches.setdefault(sid, Watch())
+            if watch.ready or time.monotonic() < watch.retry_at:
+                continue
+            try:
                 if self.db.workspace(wid)["state"] == "archived":
                     self.transport.bindings.pop(sid, None)
+                    self.watches.pop(sid, None)
                     continue
+                if watch.key is None:
+                    watch.key = f"watch:{generation}:{sid}:{uuid.uuid4()}"
                 self.transport.call(
-                    {"op": "watch", "wid": wid, "sid": sid}, key=f"watch:{generation}:{sid}"
+                    {"op": "watch", "wid": wid, "sid": sid}, key=watch.key, timeout=1
                 )
-            self.generation = generation
+            except Unconfirmed:
+                # Keep the same durable command while its outcome is unknown.
+                watch.retry_at = time.monotonic() + 1
+            except (RuntimeError, sqlite3.Error) as exc:
+                # A settled error is cached in the journal. A later retry needs
+                # a fresh identity, but must never change the session binding.
+                watch.key = None
+                watch.retry_at = time.monotonic() + 30
+                log.warning("Conductor watch failed for session %s; retrying in 30s: %s", sid, exc)
+            else:
+                watch.ready = True
         return True
 
     def validate(self, wid, sid=None):

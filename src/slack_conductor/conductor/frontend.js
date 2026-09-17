@@ -65,12 +65,19 @@
     });
   };
   const bind = async (wid, sid) => {
-    const w = await workspace.getWorkspace(wid), s = await session.getSession(sid);
-    if (!w || !s || s.localWorkspaceId !== wid || w.state === 'archived') throw Error('Conductor target changed');
-    p.bindings[sid] = wid;
-    if (!p.watches[sid]) p.watches[sid] = await composer.watchSession({localWorkspaceId: wid, sessionId: sid});
-    await composer.refresh({sessionId: sid});
-    return s;
+    try {
+      const w = await workspace.getWorkspace(wid), s = await session.getSession(sid);
+      if (!w || !s || s.localWorkspaceId !== wid || w.state === 'archived') throw Error('Conductor target changed');
+      p.bindings[sid] = wid;
+      if (!p.watches[sid]) p.watches[sid] = await composer.watchSession({localWorkspaceId: wid, sessionId: sid});
+      await composer.refresh({sessionId: sid});
+      return s;
+    } catch (error) {
+      delete p.sessions[sid];
+      p.watches[sid]?.cancel?.();
+      delete p.watches[sid];
+      throw error;
+    }
   };
   async function execute(c) {
     if (c.op === 'detach') { p.detach(); return true; }
@@ -121,10 +128,10 @@
     if (p.stopped || p.reading) return;
     p.reading = true;
     try {
-      await Promise.all(Object.keys(p.bindings).map(async sid => {
+      await Promise.all(Object.keys(p.watches).map(async sid => {
         try {
           const live = await sidecar.getSessionStatus({id: sid});
-          p.sessions[sid] = {live, paused: composer.state.state.sessions[sid]?.paused, at: Date.now() / 1000};
+          if (p.watches[sid]) p.sessions[sid] = {live, paused: composer.state.state.sessions[sid]?.paused, at: Date.now() / 1000};
         } catch { delete p.sessions[sid]; }
       }));
     } finally { p.reading = false; }

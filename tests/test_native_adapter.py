@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from slack_conductor.conductor.journal import Journal, Unconfirmed
 from slack_conductor.conductor.models import configuration
 from slack_conductor.conductor.native import Conductor, NativeDB, identity
 from slack_conductor.config import Config
@@ -37,7 +38,90 @@ def fixture(tmp_path):
     )
     adapter.transport = transport
     adapter.db = NativeDB(path, transport)
+    adapter.generation = None
+    adapter.watches = {}
     return adapter, path
+
+
+def test_failed_watch_is_isolated_retried_and_reset_on_reattachment(tmp_path, monkeypatch):
+    adapter, path = fixture(tmp_path)
+    clock = [100.0]
+    monkeypatch.setattr("slack_conductor.conductor.native.time.monotonic", lambda: clock[0])
+    transport = adapter.transport
+    transport.online = lambda: True
+    transport.attachment = {"generation": "first"}
+    transport.journal = Journal(tmp_path / "journal.sqlite")
+    transport.bindings = {"s": "w", "healthy": "w", "missing": "gone", "closed": "archived"}
+    with closing(sqlite3.connect(path)) as c, c:
+        c.execute("INSERT INTO workspaces(local_id,state) VALUES ('archived','archived')")
+    calls = []
+    failing = {"s"}
+
+    def call(body, *, key, timeout):
+        calls.append((body["sid"], key))
+        transport.journal.enqueue(key, body)
+        command = transport.journal.claim(transport.attachment["generation"])
+        if command:
+            transport.journal.complete(
+                command["id"],
+                transport.attachment["generation"],
+                {"error": "Conductor target changed"}
+                if body["sid"] in failing
+                else {"value": True},
+            )
+        return transport.journal.wait(key, timeout)
+
+    transport.call = call
+    assert adapter.ready() is True
+    assert adapter.watches["healthy"].ready
+    assert not adapter.watches["s"].ready
+    assert not adapter.watches["missing"].ready
+    assert transport.bindings == {"s": "w", "healthy": "w", "missing": "gone"}
+    assert [sid for sid, _ in calls] == ["s", "healthy"]
+    first_key = calls[0][1]
+    clock[0] += 29
+    adapter.ready()
+    assert len(calls) == 2  # no tight retry loop, including missing DB records
+    failing.clear()
+    clock[0] += 1
+    adapter.ready()
+    assert adapter.watches["s"].ready
+    assert calls[-1][1] != first_key  # must not replay the journal's cached error
+    transport.attachment["generation"] = "second"
+    adapter.ready()
+    assert [sid for sid, _ in calls[-2:]] == ["s", "healthy"]
+    assert all("second" in key for _, key in calls[-2:])
+
+
+def test_unconfirmed_watch_keeps_its_command_identity(tmp_path, monkeypatch):
+    adapter, _ = fixture(tmp_path)
+    clock = [100.0]
+    monkeypatch.setattr("slack_conductor.conductor.native.time.monotonic", lambda: clock[0])
+    transport = adapter.transport
+    transport.online = lambda: True
+    transport.attachment = {"generation": "first"}
+    transport.journal = Journal(tmp_path / "journal.sqlite")
+    transport.bindings = {"s": "w"}
+    keys = []
+
+    def call(body, *, key, timeout):
+        transport.journal.enqueue(key, body)
+        keys.append(key)
+        if len(keys) == 1:
+            raise Unconfirmed("acknowledgement delayed")
+        command = transport.journal.claim("first")
+        transport.journal.complete(command["id"], "first", {"value": True})
+        return transport.journal.wait(key, timeout)
+
+    transport.call = call
+    assert adapter.ready() is True
+    assert not adapter.watches["s"].ready
+    clock[0] += 1
+    assert adapter.ready() is True
+    assert adapter.watches["s"].ready
+    assert keys[0] == keys[1]
+    with transport.journal.connect() as c:
+        assert c.execute("SELECT count(*) FROM commands").fetchone()[0] == 1
 
 
 def test_binding_ignores_selected_chat_but_rejects_foreign_session(tmp_path):
