@@ -14,15 +14,15 @@ def fixture(tmp_path):
     with closing(sqlite3.connect(path)) as c, c:
         c.executescript("""
             CREATE TABLE repos(id,root_path);
-            CREATE TABLE workspaces(id,repository_id,workspace_path,state,active_session_id);
+            CREATE TABLE workspaces(local_id,id,repository_id,workspace_path,state,active_session_id);
             CREATE TABLE sessions(id,workspace_id,model,status);
             CREATE TABLE session_messages(id,session_id,role,content);
             CREATE TABLE session_messages_outbox(message_id,session_id);
         """)
         c.execute("INSERT INTO repos VALUES (?,?)", ("r", str(tmp_path)))
         c.execute(
-            "INSERT INTO workspaces VALUES (?,?,?,?,?)",
-            ("w", "r", str(tmp_path / "workspaces/w"), "ready", "selected-other"),
+            "INSERT INTO workspaces VALUES (?,?,?,?,?,?)",
+            ("w", "remote-w", "r", str(tmp_path / "workspaces/w"), "ready", "selected-other"),
         )
         c.execute("INSERT INTO sessions VALUES (?,?,?,?)", ("s", "w", "gpt-5.6-luna", "idle"))
         c.execute(
@@ -42,6 +42,7 @@ def fixture(tmp_path):
 
 def test_binding_ignores_selected_chat_but_rejects_foreign_session(tmp_path):
     adapter, _ = fixture(tmp_path)
+    assert adapter.validate("w", "s")["id"] == "w"
     assert adapter.validate("w", "s")["active_session_id"] == "s"
     with pytest.raises(RuntimeError, match="does not belong"):
         adapter.validate("w", "foreign")
@@ -84,12 +85,15 @@ def test_recovered_creation_uses_original_workspace_and_session(tmp_path):
 
     def call(body, **kwargs):
         wid = body["wid"]
+        if body["op"] == "create":
+            assert body["args"]["localWorkspaceId"] == wid
+            assert "workspaceId" not in body["args"]
         with closing(sqlite3.connect(path)) as c, c:
-            if not c.execute("SELECT 1 FROM workspaces WHERE id=?", (wid,)).fetchone():
+            if not c.execute("SELECT 1 FROM workspaces WHERE local_id=?", (wid,)).fetchone():
                 created.append(wid)
                 c.execute(
-                    "INSERT INTO workspaces VALUES (?,?,?,?,?)",
-                    (wid, "r", str(tmp_path / "workspaces" / wid), "ready", None),
+                    "INSERT INTO workspaces VALUES (?,?,?,?,?,?)",
+                    (wid, "remote-" + wid, "r", str(tmp_path / "workspaces" / wid), "ready", None),
                 )
                 c.execute(
                     "INSERT INTO sessions VALUES (?,?,?,?)", ("created", wid, "fable-5-1", "idle")

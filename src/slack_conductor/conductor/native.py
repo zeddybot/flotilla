@@ -124,7 +124,7 @@ class Conductor:
         if len(repos) != 1:
             raise RuntimeError("Configured repository must be registered in Conductor")
         args = {
-            "workspaceId": wid,
+            "localWorkspaceId": wid,
             "repositoryId": repos[0]["id"],
             "hostingServerUrl": "/",
             "model": model_id(self.config.model) or "fable-5-1",
@@ -134,7 +134,9 @@ class Conductor:
         self.transport.call({"op": "create", "wid": wid, "args": args}, key="create:" + wid)
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
-            workspaces = self.db.query("SELECT * FROM workspaces WHERE id=?", (wid,))
+            workspaces = self.db.query(
+                "SELECT local_id AS id,* FROM workspaces WHERE local_id=?", (wid,)
+            )
             sessions = self.db.query("SELECT * FROM sessions WHERE workspace_id=?", (wid,))
             if workspaces and workspaces[0]["state"] == "ready" and len(sessions) == 1:
                 sid = sessions[0]["id"]
