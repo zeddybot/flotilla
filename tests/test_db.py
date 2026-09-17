@@ -5,6 +5,63 @@ from contextlib import closing
 import pytest
 
 from slack_conductor.conductor.db import ConductorDB, classify
+from slack_conductor.poller import Poller
+from tests.support import message, status
+
+
+@pytest.mark.parametrize(
+    ("agent", "is_error", "expected"),
+    [
+        ("acp", False, "Actual Alpha answer."),
+        ("claude", False, "end_turn"),
+        ("acp", True, "end_turn"),
+    ],
+)
+def test_acp_completion_marker_preserves_answer_through_slack_delivery(
+    bridge_state, agent, is_error, expected
+):
+    store, conn, db, slack = bridge_state
+    conn.execute("ALTER TABLE sessions ADD COLUMN agent_type TEXT")
+    conn.execute("UPDATE sessions SET agent_type=?", (agent,))
+    request = status(store, "alpha", "hello")
+    message(conn, "user", "hello", "turn")
+    message(
+        conn,
+        "assistant",
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "Actual Alpha answer."}]},
+            }
+        ),
+        "turn",
+    )
+    message(
+        conn,
+        "assistant",
+        json.dumps(
+            {
+                "type": "result",
+                "subtype": "success",
+                "result": "end_turn",
+                "is_error": is_error,
+            }
+        ),
+        "turn",
+    )
+    Poller(store, db, slack, settle_seconds=0).tick()
+    assert store.status(request)["state"] == "complete"
+    assert store.status(request)["result"] == expected
+    assert expected in slack.edits[-1][1]
+    # Observation normalization never rewrites Conductor's persisted transcript.
+    assert (
+        json.loads(
+            conn.execute(
+                "SELECT content FROM session_messages ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()[0]
+        )["result"]
+        == "end_turn"
+    )
 
 
 def test_classification_ignores_user_and_nested_agent_output():

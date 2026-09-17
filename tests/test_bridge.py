@@ -106,6 +106,8 @@ def test_channel_followups_require_mention_and_reuse_mapped_session(bridge_state
     assert validated == [("w", "s")]
     assert sent[0][:2] == ("w", "s")
     assert sent[0][2].endswith("continue investigating")
+    assert "<@USER_ID>" in sent[0][2]
+    assert "not automatically the person who dispatched you" in sent[0][2]
     assert sent[0][3]["send_mode"] == "queue"
     assert store.thread("C1", "1")["session_id"] == "s"
 

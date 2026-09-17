@@ -35,11 +35,29 @@ class ConductorDB:
     def messages(self, sid, after):
         # Timestamps can collide. rowid gives insertion order; unsent queue rows
         # are matched independently because Conductor can update them in place.
-        return self.query(
+        rows = self.query(
             "SELECT rowid AS seq,* FROM session_messages "
             "WHERE session_id=? AND rowid>? ORDER BY rowid",
             (sid, after),
         )
+        for row in rows:
+            if row.get("role") != "assistant":
+                continue
+            try:
+                event = json.loads(row["content"])
+            except (ValueError, TypeError):
+                continue
+            if (
+                isinstance(event, dict)
+                and event.get("type") == "result"
+                and event.get("result") == "end_turn"
+                and not event.get("is_error")
+                and ConductorDB.session(self, sid).get("agent_type") == "acp"
+            ):
+                # ACP's stop reason is a completion boundary, not the answer.
+                # Preserve the preceding assistant text, as for Codex completions.
+                row["content"] = json.dumps({**event, "result": None})
+        return rows
 
     def has_user_messages(self, sid):
         """An accepted outbox message freezes initial configuration too."""

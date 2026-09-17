@@ -13,7 +13,7 @@
     return candidates[0];
   };
   const workspace = service('getWorkspace', 'createWorkspaceWithSetup');
-  const session = service('getSession', 'updateSessionModelConfiguration');
+  const session = service('getSession', 'updateSessionModelConfiguration', 'setSessionAgentAndModel');
   const composer = service('watchSession', 'sendMessage', 'getDraftAttachments');
   const sidecar = service('getSessionStatus', 'query', 'resolveToolApproval');
   // Probe initialized services, not just exported method names.
@@ -97,7 +97,16 @@
     await bind(c.wid, c.sid);
     await lease();
     if (c.op === 'createdSession') return workspace.setActiveSessionId({localWorkspaceId: c.wid, activeSessionId: c.sid});
-    if (c.op === 'configure') return session.updateSessionModelConfiguration({sessionId: c.sid, configuration: c.configuration});
+    if (c.op === 'configure') {
+      if (c.configuration.agent === 'acp') {
+        const changed = await session.setSessionAgentAndModel({
+          sessionId: c.sid, agentType: 'acp', model: c.configuration.model
+        });
+        if (!changed) throw Error('Conductor model selection did not apply');
+        return true;
+      }
+      return session.updateSessionModelConfiguration({sessionId: c.sid, configuration: c.configuration});
+    }
     if (c.op === 'watch') return serial(c.sid, async () => {
       const intent = await request('pause?sid=' + encodeURIComponent(c.sid));
       // No observation means no authority to resume a pre-existing queue.

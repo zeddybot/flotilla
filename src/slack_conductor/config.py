@@ -26,6 +26,7 @@ class Config:
             "sol": "GPT-5.6 Sol",
             "terra": "GPT-5.6 Terra",
             "luna": "GPT-5.6 Luna",
+            "alpha": "Union Alpha Free",
         }
     )
 

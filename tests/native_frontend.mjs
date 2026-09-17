@@ -4,6 +4,7 @@ import vm from 'node:vm';
 
 const applied = [], calls = [], commands = [], sent = [], configured = [];
 const watched = [], created = [], selected = [], archived = [];
+const acpConfigured = [];
 let intent = {paused: false}, release, block = false, reject = false;
 const composer = {
   state: {state: {sessions: {s: {paused: false}}}},
@@ -23,6 +24,7 @@ const testExports = {
     dependencies: {repo: {getRepos: async () => []}}
   },
   session: {getSession: async sid => ({localWorkspaceId: sid === 'foreign' ? 'elsewhere' : 'w'}),
+    setSessionAgentAndModel(args) { acpConfigured.push(args); return args.model !== 'unavailable'; },
     updateSessionModelConfiguration(args) { configured.push(args); return true; }},
   composer,
   sidecar: {getSessionStatus: async () => ({status: 'idle'}), query() {}, resolveToolApproval() {}}
@@ -89,6 +91,15 @@ try {
   assert.equal(configured.length, 1);
   assert.equal(configured[0].sessionId, 's');
   assert.deepEqual(JSON.parse(JSON.stringify(configured[0].configuration)), configuration);
+  const alpha = {agent: 'acp', model: 'opencode:opencode/union-alpha', fastMode: false};
+  assert.equal((await dispatch('alpha', {op: 'configure', wid: 'w', sid: 's', configuration: alpha})).value, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(acpConfigured[0])), {
+    sessionId: 's', agentType: 'acp', model: 'opencode:opencode/union-alpha'
+  });
+  assert.equal(configured.length, 1); // ACP bypasses the Claude/Codex-only configuration validator.
+  assert.match((await dispatch('alpha-failed', {
+    op: 'configure', wid: 'w', sid: 's', configuration: {...alpha, model: 'unavailable'}
+  })).error, /selection did not apply/);
   for (const mode of ['queue', 'steer']) {
     const result = await dispatch(mode, {op: 'send', wid: 'w', sid: 's', message_id: mode, mode, prompt: 'hello'});
     assert.equal(result.value.ok, true);
