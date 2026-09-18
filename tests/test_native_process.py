@@ -36,6 +36,23 @@ def test_process_identity_changes_when_pid_is_reused(monkeypatch):
     assert process.incarnation() == "22:Fri Sep 11 01:00:00 2026"
 
 
+def test_stalled_process_probe_keeps_live_identity_and_backs_off(monkeypatch):
+    monkeypatch.setattr(process, "_cached", "22:Thu Sep 10 21:53:00 2026")
+    monkeypatch.setattr(process, "_checked", 0)
+    monkeypatch.setattr(process.time, "monotonic", lambda: 100)
+    monkeypatch.setattr(process.os, "kill", lambda *_: None)
+    probes = []
+
+    def stall(args, **kwargs):
+        probes.append(args)
+        raise process.subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr(process.subprocess, "check_output", stall)
+    assert process.incarnation() == "22:Thu Sep 10 21:53:00 2026"
+    assert process.incarnation() == "22:Thu Sep 10 21:53:00 2026"
+    assert len(probes) == 1
+
+
 def inspector_module(monkeypatch):
     import importlib.util
     import sys
