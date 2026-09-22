@@ -50,7 +50,7 @@ const context = {
   }
 };
 const source = fs.readFileSync(new URL('../src/slack_conductor/conductor/frontend.js', import.meta.url), 'utf8')
-  .replace('__CONFIG__', JSON.stringify({base: 'http://localhost/token', generation: 'g', bindings: {s: 'w', foreign: 'w'}}))
+  .replace('__CONFIG__', JSON.stringify({base: 'http://localhost/token', generation: 'g', release: 30000, bindings: {s: 'w', foreign: 'w'}}))
   .replace('await import(script.src)', 'testExports');
 const installation = vm.runInNewContext(source, context);
 const until = async predicate => {

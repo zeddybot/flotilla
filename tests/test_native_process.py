@@ -162,9 +162,9 @@ def attachment_attempts(monkeypatch, online):
 def test_wedged_frontend_reattaches_only_after_the_grace_period(monkeypatch):
     from slack_conductor.conductor import attachment
 
-    # A zero grace re-attaches on the tick after the heartbeat lapses, which is
-    # the focus-stealing loop this guards; the frontend outlasts a real stall.
-    assert attachment.REATTACH_GRACE >= 1
+    # Re-attaching before the frontend releases itself foregrounds Conductor to
+    # replace a frontend that was only stalled: the focus-stealing loop this guards.
+    assert attachment.REATTACH_GRACE >= attachment.FRONTEND_RELEASE
     monkeypatch.setattr(attachment, "REATTACH_GRACE", 3)
     # Serving until t=1, then silent: a stalled machine freezes the frontend and
     # the daemon together, so foregrounding the app has to wait out the recovery.
@@ -184,3 +184,15 @@ def test_own_bootstrap_draft_is_reclaimed_but_typed_input_is_not():
     assert attachment.own_draft(snippet.replace("const r", "const  r"))
     assert not attachment.own_draft("await workspace.getWorkspaces()")
     assert not attachment.own_draft("")
+
+
+def test_release_window_reaches_the_frontend_under_the_name_it_reads():
+    from pathlib import Path
+
+    from slack_conductor.conductor import attachment
+
+    source = Path(attachment.__file__).with_name("frontend.js").read_text()
+    # Renaming either side leaves config.release undefined, which compares false and
+    # would keep a frontend the daemon abandoned patched over the composer forever.
+    assert "config.release" in source
+    assert attachment.frontend_config({})["release"] == attachment.FRONTEND_RELEASE * 1000

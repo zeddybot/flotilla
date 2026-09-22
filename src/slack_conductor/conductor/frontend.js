@@ -149,15 +149,15 @@
     } finally { p.reading = false; }
   }, 1000);
   // Heartbeats overlap under load, so an outage is measured from the last
-  // acknowledgement rather than counted in failures. Outliving the daemon's own
-  // re-attach grace keeps a wedged machine from costing a foreground Inspector
+  // acknowledgement rather than counted in failures. The daemon owns the release
+  // window and stays just past it, so a wedged machine costs no foreground
   // bootstrap, while a daemon that never returns still releases the composer.
   p.beatingSince = Date.now();
   p.heartbeatTimer = setInterval(() => {
     if (p.stopped) return;
     request('heartbeat', {ready: true, sessions: p.sessions}).then(
       () => { p.beatingSince = Date.now(); },
-      error => { if (error.superseded || Date.now() - p.beatingSince >= 30000) p.detach(); }
+      error => { if (error.superseded || Date.now() - p.beatingSince >= config.release) p.detach(); }
     );
   }, 400);
   // The Inspector evaluation must finish once installed; returning the lifetime
