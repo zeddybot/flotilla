@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 const source = fs.readFileSync(new URL('../src/slack_conductor/conductor/frontend.js', import.meta.url), 'utf8')
-  .replace('__CONFIG__', JSON.stringify({base: 'http://localhost/token', generation: 'g', bindings: {}}))
+  .replace('__CONFIG__', JSON.stringify({base: 'http://localhost/token', generation: 'g', release: 12000, bindings: {}}))
   .replace('await import(script.src)', 'testExports');
 
 const timers = new Set();
@@ -73,13 +73,13 @@ try {
     // Recovery rearms the window instead of leaving it primed to expire.
     state.mode = 'ok';
     await until(() => live.beatingSince === state.clock, 'heartbeat did not recover');
-    state.clock += 29_000;
+    state.clock += 11_000;
     state.mode = 'stall';
     const survived = state.beats.length;
     await until(() => state.beats.length > survived + 2, 'heartbeats stopped below the window');
     assert.equal(live.stopped, false);
 
-    // Only an outage outlasting the daemon's re-attach grace releases the composer.
+    // Only an outage outlasting the injected release window frees the composer.
     state.clock += 2_000;
     await until(() => context.window.__flotilla === undefined, 'sustained outage never detached');
     assert.equal(live.stopped, true);

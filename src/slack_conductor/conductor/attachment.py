@@ -11,10 +11,19 @@ from .process import incarnation
 log = logging.getLogger(__name__)
 
 BOOTSTRAP_PREFIX = "(()=>{const r=new XMLHttpRequest();"
-# A stalled machine freezes the daemon and the frontend together. Re-attaching the
-# moment a heartbeat goes stale foregrounds Conductor while the frontend is merely
-# wedged, so wait for the outage to outlast the frontend's own recovery.
-REATTACH_GRACE = 5
+# How long the frontend keeps retrying unacknowledged heartbeats before releasing
+# itself. Injected into its config so both ends share one number.
+FRONTEND_RELEASE = 30
+# A stalled machine freezes the daemon and the frontend together, and re-attaching
+# foregrounds Conductor to replace a frontend that was only wedged. online() already
+# tolerates 5s of staleness before this grace starts, so waiting the full release
+# window leaves the daemon behind the frontend's own deadline: a stall the frontend
+# survives never costs a foreground bootstrap.
+REATTACH_GRACE = FRONTEND_RELEASE
+
+
+def frontend_config(config):
+    return {**config, "release": FRONTEND_RELEASE * 1000}
 
 
 def bootstrap_snippet(url):
@@ -87,7 +96,7 @@ def _attach(transport, ax):
                 Path(__file__)
                 .with_name("frontend.js")
                 .read_text()
-                .replace("__CONFIG__", json.dumps(config))
+                .replace("__CONFIG__", json.dumps(frontend_config(config)))
             )
             url = config["base"] + "/bootstrap?generation=" + config["generation"]
             ax.set(prompt, "AXFocused", True)
