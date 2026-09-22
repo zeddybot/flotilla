@@ -192,6 +192,12 @@ class Inspector:
             time.sleep(0.15)
         raise RuntimeError(message)
 
+    def select_all(self):
+        for down in (True, False):
+            event = Quartz.CGEventCreateKeyboardEvent(None, 0, down)
+            Quartz.CGEventSetFlags(event, Quartz.kCGEventFlagMaskCommand)
+            Quartz.CGEventPostToPid(self.pid, event)
+
     def type_text(self, text):
         # A Unicode text event carries embedded newlines without pressing Return,
         # and targets Conductor directly without touching the system clipboard.
