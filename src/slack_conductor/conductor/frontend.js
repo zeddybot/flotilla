@@ -22,15 +22,18 @@
   window.__flotilla?.detach();
   const p = {stopped: false, sessions: {}, bindings: {...config.bindings}, watches: {}, serial: {}};
   window.__flotilla = p;
-  class Disconnected extends Error {}
+  class Disconnected extends Error {
+    // A rejected generation is terminal; an unanswered request may still be a stall.
+    constructor(message, superseded) { super(message); this.superseded = superseded; }
+  }
   const request = async (route, data) => {
     const response = await fetch(config.base + '/' + route +
       (data === undefined ? (route.includes('?') ? '&' : '?') + 'generation=' + config.generation : ''),
       data === undefined ? {signal: AbortSignal.timeout(5000)} : {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({...data, generation: config.generation}), signal: AbortSignal.timeout(5000)
-      }).catch(() => { throw new Disconnected('Conductor attachment disconnected'); });
-    if (!response.ok) throw new Disconnected('Conductor attachment disconnected');
+      }).catch(() => { throw new Disconnected('Conductor attachment disconnected', false); });
+    if (!response.ok) throw new Disconnected('Conductor attachment disconnected', true);
     return response.json();
   };
   const serial = (sid, action) => {
@@ -39,9 +42,9 @@
     return next;
   };
   const lease = async () => {
-    if (p.stopped) throw new Disconnected('Conductor attachment replaced');
+    if (p.stopped) throw new Disconnected('Conductor attachment replaced', true);
     await request('valid');
-    if (p.stopped) throw new Disconnected('Conductor attachment replaced');
+    if (p.stopped) throw new Disconnected('Conductor attachment replaced', true);
   };
   const originalPause = composer.setPaused;
   const originalSend = composer.sendMessage;
@@ -145,8 +148,17 @@
       }));
     } finally { p.reading = false; }
   }, 1000);
+  // Heartbeats overlap under load, so an outage is measured from the last
+  // acknowledgement rather than counted in failures. Outliving the daemon's own
+  // re-attach grace keeps a wedged machine from costing a foreground Inspector
+  // bootstrap, while a daemon that never returns still releases the composer.
+  p.beatingSince = Date.now();
   p.heartbeatTimer = setInterval(() => {
-    if (!p.stopped) request('heartbeat', {ready: true, sessions: p.sessions}).catch(() => p.detach());
+    if (p.stopped) return;
+    request('heartbeat', {ready: true, sessions: p.sessions}).then(
+      () => { p.beatingSince = Date.now(); },
+      error => { if (error.superseded || Date.now() - p.beatingSince >= 30000) p.detach(); }
+    );
   }, 400);
   // The Inspector evaluation must finish once installed; returning the lifetime
   // promise can hold subsequent console evaluations behind this attachment.

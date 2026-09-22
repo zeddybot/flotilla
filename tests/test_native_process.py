@@ -133,3 +133,54 @@ def test_new_app_does_not_inherit_failed_attachment_backoff(monkeypatch):
     )
     worker.run()
     assert attempts == [0, 1]
+
+
+def attachment_attempts(monkeypatch, online):
+    import sys
+    from types import SimpleNamespace
+
+    from slack_conductor.conductor import attachment
+
+    now, attempts = [0], []
+    monkeypatch.setitem(
+        sys.modules,
+        "slack_conductor.conductor.inspector",
+        SimpleNamespace(Inspector=SimpleNamespace(focused_pid=lambda: 1)),
+    )
+    monkeypatch.setattr(attachment.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(attachment, "incarnation", lambda: "1:app")
+    monkeypatch.setattr(attachment, "attach", lambda *args: attempts.append(now[0]))
+    worker = attachment.Attachment(SimpleNamespace(online=lambda: online(now[0])))
+    worker.stop = SimpleNamespace(
+        is_set=lambda: now[0] >= 10,
+        wait=lambda seconds: now.__setitem__(0, now[0] + seconds),
+    )
+    worker.run()
+    return attempts
+
+
+def test_wedged_frontend_reattaches_only_after_the_grace_period(monkeypatch):
+    from slack_conductor.conductor import attachment
+
+    # A zero grace re-attaches on the tick after the heartbeat lapses, which is
+    # the focus-stealing loop this guards; the frontend outlasts a real stall.
+    assert attachment.REATTACH_GRACE >= 1
+    monkeypatch.setattr(attachment, "REATTACH_GRACE", 3)
+    # Serving until t=1, then silent: a stalled machine freezes the frontend and
+    # the daemon together, so foregrounding the app has to wait out the recovery.
+    assert attachment_attempts(monkeypatch, lambda t: t < 1)[0] == 4
+
+
+def test_frontend_that_never_served_attaches_without_waiting(monkeypatch):
+    assert attachment_attempts(monkeypatch, lambda t: False)[0] == 0
+
+
+def test_own_bootstrap_draft_is_reclaimed_but_typed_input_is_not():
+    from slack_conductor.conductor import attachment
+
+    snippet = attachment.bootstrap_snippet("http://127.0.0.1:1/t/bootstrap?generation=g")
+    assert attachment.own_draft(snippet)
+    # Web Inspector reports the prompt as highlighted spans joined without spacing.
+    assert attachment.own_draft(snippet.replace("const r", "const  r"))
+    assert not attachment.own_draft("await workspace.getWorkspaces()")
+    assert not attachment.own_draft("")

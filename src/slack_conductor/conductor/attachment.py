@@ -10,6 +10,25 @@ from .process import incarnation
 
 log = logging.getLogger(__name__)
 
+BOOTSTRAP_PREFIX = "(()=>{const r=new XMLHttpRequest();"
+# A stalled machine freezes the daemon and the frontend together. Re-attaching the
+# moment a heartbeat goes stale foregrounds Conductor while the frontend is merely
+# wedged, so wait for the outage to outlast the frontend's own recovery.
+REATTACH_GRACE = 5
+
+
+def bootstrap_snippet(url):
+    return (
+        BOOTSTRAP_PREFIX + "r.open('GET'," + json.dumps(url) + ",false);r.send();"
+        "if(r.status!==200)throw Error('Attachment expired');"
+        "window.__flotilla?.detach();eval(r.responseText)})();"
+    )
+
+
+def own_draft(draft):
+    # CodeMirror reports the prompt as highlighted spans, so compare without spacing.
+    return "".join(draft.split()).startswith("".join(BOOTSTRAP_PREFIX.split()))
+
 
 def attach(transport):
     from .inspector import Inspector
@@ -60,7 +79,8 @@ def _attach(transport, ax):
                     "Inspector console unavailable",
                     5,
                 )
-            if Inspector.draft(prompt).strip():
+            draft = Inspector.draft(prompt).strip()
+            if draft and not own_draft(draft):
                 raise RuntimeError("Inspector console has a draft; clear it to allow attachment")
             config = transport.attach(incarnation())
             transport.bootstrap = (
@@ -71,12 +91,14 @@ def _attach(transport, ax):
             )
             url = config["base"] + "/bootstrap?generation=" + config["generation"]
             ax.set(prompt, "AXFocused", True)
-            ax.type_text(
-                "(()=>{const r=new XMLHttpRequest();r.open('GET',"
-                + json.dumps(url)
-                + ",false);r.send();if(r.status!==200)throw Error('Attachment expired');"
-                "window.__flotilla?.detach();eval(r.responseText)})();"
-            )
+            if draft:
+                # Replacing a previous attempt's snippet means selecting it first.
+                # Refuse unless the prompt really holds focus, or the select-all
+                # would overwrite whatever else in Conductor does.
+                if not attr(prompt, "AXFocused"):
+                    raise RuntimeError("Inspector console prompt did not take focus")
+                ax.select_all()
+            ax.type_text(bootstrap_snippet(url))
             time.sleep(0.2)
             for down in (True, False):
                 event = Quartz.CGEventCreateKeyboardEvent(None, 36, down)
@@ -108,25 +130,35 @@ class Attachment:
     def run(self):
         from .inspector import Inspector
 
-        failures, last_app, retry_at = 0, None, 0
+        failures, last_app, retry_at, offline_since, established = 0, None, 0, 0, False
         while not self.stop.is_set():
             current = incarnation()
             if current != last_app:
-                failures, last_app, retry_at = 0, current, 0
+                failures, last_app, retry_at, established = 0, current, 0, False
             if self.transport.online():
-                failures = 0
-            elif time.monotonic() >= retry_at and (
-                not failures
-                or (current and Inspector.focused_pid() == int(current.split(":", 1)[0]))
-            ):
-                try:
-                    attach(self.transport)
-                    log.info("Conductor native frontend attached")
-                    failures = 0
-                except Exception as exc:
-                    failures += 1
-                    retry_at = time.monotonic() + 60
-                    log.warning("Conductor attachment pending: %s", exc, exc_info=True)
+                failures, offline_since, established = 0, 0, True
+            else:
+                if not offline_since:
+                    offline_since = time.monotonic()
+                # Only a frontend that was already serving earns the grace period;
+                # a cold start or a fresh app still attaches on the first tick.
+                settled = not established or time.monotonic() - offline_since >= REATTACH_GRACE
+                if (
+                    settled
+                    and time.monotonic() >= retry_at
+                    and (
+                        not failures
+                        or (current and Inspector.focused_pid() == int(current.split(":", 1)[0]))
+                    )
+                ):
+                    try:
+                        attach(self.transport)
+                        log.info("Conductor native frontend attached")
+                        failures = 0
+                    except Exception as exc:
+                        failures += 1
+                        retry_at = time.monotonic() + 60
+                        log.warning("Conductor attachment pending: %s", exc, exc_info=True)
             # After a failed bootstrap, retries cannot repeatedly foreground the
             # app: wait for the user to select it, and retry at most once a minute.
             # Keep observing process changes during backoff so a new app launch
