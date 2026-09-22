@@ -25,7 +25,7 @@ def fixture(tmp_path):
             "INSERT INTO workspaces VALUES (?,?,?,?,?,?)",
             ("w", "remote-w", "r", str(tmp_path / "workspaces/w"), "ready", "selected-other"),
         )
-        c.execute("INSERT INTO sessions VALUES (?,?,?,?)", ("s", "w", "gpt-5.6-luna", "idle"))
+        c.execute("INSERT INTO sessions VALUES (?,?,?,?)", ("s", "w", "gpt-6-luna", "idle"))
         c.execute(
             "INSERT INTO sessions VALUES (?,?,?,?)", ("foreign", "elsewhere", "fable-5-1", "idle")
         )
@@ -156,7 +156,7 @@ def test_send_reuses_native_identity_after_ack_loss(tmp_path):
                 )
 
     adapter.transport.call = call
-    options = {"model": "GPT-5.6 Luna", "effort": "high", "fast": False, "send_mode": "steer"}
+    options = {"model": "GPT-6 Luna", "effort": "high", "fast": False, "send_mode": "steer"}
     adapter.send("w", "s", "unique Slack message", options)
     adapter.send("w", "s", "unique Slack message", options)
     assert [c["op"] for c in calls] == ["configure", "send"]
@@ -195,13 +195,13 @@ def test_recovered_creation_uses_original_workspace_and_session(tmp_path):
     ("alias", "expected", "agent"),
     [
         ("fable", "fable-5-1", "claude"),
-        ("opus", "opus-5-1m", "claude"),
+        ("opus", "opus-5-5-1m", "claude"),
         ("sonnet", "sonnet-5-1m", "claude"),
         ("haiku", "haiku-4-5", "claude"),
         ("astra", "gpt-6-astra", "codex"),
-        ("sol", "gpt-5.6-sol", "codex"),
+        ("sol", "gpt-6-sol", "codex"),
         ("terra", "gpt-5.6-terra", "codex"),
-        ("luna", "gpt-5.6-luna", "codex"),
+        ("luna", "gpt-6-luna", "codex"),
         ("alpha", "opencode:opencode/union-alpha", "acp"),
     ],
 )
@@ -252,4 +252,4 @@ def test_followup_cannot_reconfigure_session_while_first_prompt_is_in_outbox(tmp
     )
     assert [call["op"] for call in calls] == ["send"]
     assert calls[0]["mode"] == "queue"
-    assert "session model remains gpt-5.6-luna" in note
+    assert "session model remains gpt-6-luna" in note

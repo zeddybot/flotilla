@@ -2,19 +2,19 @@
 
 MODELS = {
     "Fable 5.1": "fable-5-1",
-    "Opus 5": "opus-5-1m",
+    "Opus 5.5": "opus-5-5-1m",
     "Sonnet 5 1M": "sonnet-5-1m",
     "Haiku 4.5": "haiku-4-5",
     "GPT-6 Astra": "gpt-6-astra",
-    "GPT-5.6 Sol": "gpt-5.6-sol",
+    "GPT-6 Sol": "gpt-6-sol",
     "GPT-5.6 Terra": "gpt-5.6-terra",
-    "GPT-5.6 Luna": "gpt-5.6-luna",
+    "GPT-6 Luna": "gpt-6-luna",
     "Union Alpha Free": "opencode:opencode/union-alpha",
 }
 
 
 def model_id(label):
-    if label in {"5.6 Sol", "5.6 Terra", "5.6 Luna"}:
+    if label == "5.6 Terra":
         label = "GPT-" + label
     return MODELS.get(label)
 
@@ -26,9 +26,9 @@ def configuration(options, default):
         model = model_id(default) or "fable-5-1"
         warnings.append(f"requested model {options['model']} unavailable; using {default}")
     levels = ["low", "medium", "high", "xhigh", "max"]
-    if model in ("fable-5-1", "opus-5-1m"):
+    if model in ("fable-5-1", "opus-5-5-1m"):
         levels.append("ultracode")
-    elif model in ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"):
+    elif model in ("gpt-6-astra", "gpt-6-sol", "gpt-5.6-terra"):
         levels.append("ultra")
     effort = options["effort"]
     if model == "haiku-4-5" or model.startswith("opencode:"):
@@ -36,7 +36,7 @@ def configuration(options, default):
     elif effort not in levels:
         warnings.append(f"effort {effort} unavailable; using high")
         effort = "high"
-    fast = options["fast"] and (model.startswith("gpt-") or model == "opus-5-1m")
+    fast = options["fast"] and (model.startswith("gpt-") or model == "opus-5-5-1m")
     if options["fast"] and not fast:
         warnings.append("fast mode unavailable; using standard speed")
     agent = (

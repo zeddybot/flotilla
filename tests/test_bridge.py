@@ -32,9 +32,9 @@ def test_default_steering_and_explicit_queue_override():
     assert parse("[steer] change course", "B", config, queued)[1]["send_mode"] == "steer"
     for token, label in {
         "astra": "GPT-6 Astra",
-        "sol": "GPT-5.6 Sol",
+        "sol": "GPT-6 Sol",
         "terra": "GPT-5.6 Terra",
-        "luna": "GPT-5.6 Luna",
+        "luna": "GPT-6 Luna",
     }.items():
         assert parse(f"[{token}] go", "B", config)[1]["model"] == label
 
