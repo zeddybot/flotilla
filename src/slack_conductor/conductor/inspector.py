@@ -60,6 +60,17 @@ class Inspector:
         return int(value) if result.returncode == 0 and value.isdigit() else None
 
     @staticmethod
+    def unattended():
+        # The lock key is absent, not false, while the screen is unlocked.
+        session = Quartz.CGSessionCopyCurrentDictionary()
+        return bool(
+            session is None
+            or session.get("CGSSessionScreenIsLocked")
+            or not session.get("kCGSSessionOnConsoleKey")
+            or Quartz.CGDisplayIsAsleep(Quartz.CGMainDisplayID())
+        )
+
+    @staticmethod
     def activate(pid, only_if=None):
         condition = (
             f"$.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier == {int(only_if)}"

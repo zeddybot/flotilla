@@ -116,7 +116,9 @@ def test_new_app_does_not_inherit_failed_attachment_backoff(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "slack_conductor.conductor.inspector",
-        SimpleNamespace(Inspector=SimpleNamespace(focused_pid=lambda: 999)),
+        SimpleNamespace(
+            Inspector=SimpleNamespace(focused_pid=lambda: 999, unattended=lambda: False)
+        ),
     )
     monkeypatch.setattr(attachment.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(attachment, "incarnation", lambda: "1:old" if now[0] == 0 else "2:new")
@@ -135,7 +137,7 @@ def test_new_app_does_not_inherit_failed_attachment_backoff(monkeypatch):
     assert attempts == [0, 1]
 
 
-def attachment_attempts(monkeypatch, online):
+def attachment_attempts(monkeypatch, online, unattended=lambda t: False):
     import sys
     from types import SimpleNamespace
 
@@ -145,7 +147,9 @@ def attachment_attempts(monkeypatch, online):
     monkeypatch.setitem(
         sys.modules,
         "slack_conductor.conductor.inspector",
-        SimpleNamespace(Inspector=SimpleNamespace(focused_pid=lambda: 1)),
+        SimpleNamespace(
+            Inspector=SimpleNamespace(focused_pid=lambda: 1, unattended=lambda: unattended(now[0]))
+        ),
     )
     monkeypatch.setattr(attachment.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(attachment, "incarnation", lambda: "1:app")
@@ -173,6 +177,42 @@ def test_wedged_frontend_reattaches_only_after_the_grace_period(monkeypatch):
 
 def test_frontend_that_never_served_attaches_without_waiting(monkeypatch):
     assert attachment_attempts(monkeypatch, lambda t: False)[0] == 0
+
+
+def test_locked_screen_defers_attachment_without_spending_a_retry(monkeypatch, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO)
+    attempts = attachment_attempts(monkeypatch, lambda t: False, unattended=lambda t: t < 4)
+    assert attempts[0] == 4
+    assert caplog.text.count("deferred until the screen is unlocked") == 1
+
+
+def test_lock_state_is_read_from_the_login_session(monkeypatch):
+    from types import SimpleNamespace
+
+    module = inspector_module(monkeypatch)
+    session = {"kCGSSessionOnConsoleKey": True}
+    asleep = [0]
+    monkeypatch.setattr(
+        module,
+        "Quartz",
+        SimpleNamespace(
+            CGSessionCopyCurrentDictionary=lambda: session,
+            CGMainDisplayID=lambda: 1,
+            CGDisplayIsAsleep=lambda _: asleep[0],
+        ),
+    )
+    assert not module.Inspector.unattended()
+    asleep[0] = 1
+    assert module.Inspector.unattended()
+    asleep[0] = 0
+    session["CGSSessionScreenIsLocked"] = True
+    assert module.Inspector.unattended()
+    session = {"kCGSSessionOnConsoleKey": False}
+    assert module.Inspector.unattended()
+    session = None
+    assert module.Inspector.unattended()
 
 
 def test_own_bootstrap_draft_is_reclaimed_but_typed_input_is_not():
