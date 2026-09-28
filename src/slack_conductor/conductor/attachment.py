@@ -39,6 +39,16 @@ def own_draft(draft):
     return "".join(draft.split()).startswith("".join(BOOTSTRAP_PREFIX.split()))
 
 
+def bootstrap_progress(transport):
+    if transport.heartbeat.get("ready"):
+        return "the frontend started, then its heartbeats stopped"
+    if transport.heartbeat:
+        return "the frontend started but Conductor's services did not initialize"
+    if transport.served:
+        return "the console fetched the frontend, which never reported back"
+    return "the console never ran the bootstrap snippet"
+
+
 def attach(transport):
     from .inspector import Inspector
 
@@ -90,7 +100,10 @@ def _attach(transport, ax):
                 )
             draft = Inspector.draft(prompt).strip()
             if draft and not own_draft(draft):
-                raise RuntimeError("Inspector console has a draft; clear it to allow attachment")
+                raise RuntimeError(
+                    "Inspector console has a draft; clear it to allow attachment: "
+                    + repr(draft[:80])
+                )
             config = transport.attach(incarnation())
             transport.bootstrap = (
                 Path(__file__)
@@ -121,7 +134,14 @@ def _attach(transport, ax):
                     )
                 return transport.online()
 
-            ax.wait(ready, "Conductor native services did not become ready", 20)
+            ax.wait(
+                ready,
+                lambda: (
+                    "Conductor native services did not become ready: "
+                    + bootstrap_progress(transport)
+                ),
+                20,
+            )
         finally:
             if opened and ax.find(role="AXTextArea", description="Console prompt") is not None:
                 ax.press(menu)

@@ -1,3 +1,5 @@
+import pytest
+
 from slack_conductor.conductor import process
 
 
@@ -213,6 +215,42 @@ def test_lock_state_is_read_from_the_login_session(monkeypatch):
     assert module.Inspector.unattended()
     session = None
     assert module.Inspector.unattended()
+
+
+def test_failed_bootstrap_reports_how_far_it_got(tmp_path, monkeypatch):
+    from http.client import HTTPConnection
+    from urllib.parse import urlparse
+
+    from slack_conductor.conductor import attachment
+    from slack_conductor.conductor.transport import Transport
+
+    module = inspector_module(monkeypatch)
+    monkeypatch.setattr(module.time, "monotonic", iter([0, 0, 1]).__next__)
+    with pytest.raises(RuntimeError, match="^computed late$"):
+        module.Inspector.wait(lambda: False, lambda: "computed late", 1)
+
+    transport = Transport(tmp_path, lambda _: True)
+    transport.start()
+    try:
+        config = transport.attach("app")
+        transport.bootstrap = "void 0"
+        assert "never ran the bootstrap snippet" in attachment.bootstrap_progress(transport)
+        url = urlparse(config["base"])
+        connection = HTTPConnection(url.hostname, url.port, timeout=2)
+        try:
+            connection.request("GET", url.path + "/bootstrap?generation=" + config["generation"])
+            assert connection.getresponse().read() == b"void 0"
+        finally:
+            connection.close()
+        assert "never reported back" in attachment.bootstrap_progress(transport)
+        transport.heartbeat = {"ready": False, "stage": "bootstrap"}
+        assert "did not initialize" in attachment.bootstrap_progress(transport)
+        transport.heartbeat = {"ready": True}
+        assert "heartbeats stopped" in attachment.bootstrap_progress(transport)
+        transport.attach("app")
+        assert "never ran the bootstrap snippet" in attachment.bootstrap_progress(transport)
+    finally:
+        transport.close()
 
 
 def test_own_bootstrap_draft_is_reclaimed_but_typed_input_is_not():

@@ -23,6 +23,7 @@ class Transport:
         self.heartbeat = {}
         self.bindings = {}
         self.bootstrap = ""
+        self.served = False
         self.token = secrets.token_urlsafe(32)
         owner = self
 
@@ -71,6 +72,7 @@ class Transport:
                             return
                         route = url.path[len(prefix) :]
                         if route == "bootstrap" and not post and owner.bootstrap:
+                            owner.served = True
                             self.reply(owner.bootstrap, script=True)
                             return
                         elif route == "next" and not post:
@@ -130,6 +132,7 @@ class Transport:
             self.attachment = {"generation": str(uuid.uuid4()), "incarnation": incarnation}
             self.heartbeat = {}
             self.bootstrap = ""
+            self.served = False
             return {
                 **self.attachment,
                 "base": f"http://127.0.0.1:{self.server.server_port}/{self.token}",
