@@ -91,3 +91,37 @@ def test_acquired_resources_close_even_when_startup_fails(tmp_path, monkeypatch,
         else ["health", "socket", "native"]
     )
     conductor.start.assert_called_once_with({})
+
+
+def test_offline_startup_waits_for_slack_instead_of_exiting(caplog):
+    from urllib.error import URLError
+
+    attempts, waits = [], []
+
+    def auth_test():
+        attempts.append(1)
+        if len(attempts) < 4:
+            raise URLError("nodename nor servname provided, or not known")
+        return {"team_id": "T"}
+
+    client = SimpleNamespace(auth_test=auth_test, users_info=lambda **_: {"user": {"id": "U"}})
+    stop = SimpleNamespace(wait=lambda delay: waits.append(delay))
+    assert slack_app.identify(client, "U", stop) == ({"team_id": "T"}, {"id": "U"})
+    assert waits == [1, 2, 4]
+    assert "Slack unreachable at startup (URLError)" in caplog.text
+
+
+def test_shutdown_ends_the_offline_wait_and_a_rejected_token_still_fails():
+    from slack_sdk.errors import SlackApiError
+
+    def offline():
+        raise TimeoutError()
+
+    stopping = SimpleNamespace(wait=lambda _: True)
+    assert slack_app.identify(SimpleNamespace(auth_test=offline), "U", stopping) is None
+
+    def rejected():
+        raise SlackApiError("invalid_auth", {"error": "invalid_auth"})
+
+    with pytest.raises(SlackApiError):
+        slack_app.identify(SimpleNamespace(auth_test=rejected), "U", stopping)
