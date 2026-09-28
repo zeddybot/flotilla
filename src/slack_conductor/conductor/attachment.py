@@ -140,6 +140,7 @@ class Attachment:
         from .inspector import Inspector
 
         failures, last_app, retry_at, offline_since, established = 0, None, 0, 0, False
+        deferred = False
         while not self.stop.is_set():
             current = incarnation()
             if current != last_app:
@@ -160,6 +161,15 @@ class Attachment:
                         or (current and Inspector.focused_pid() == int(current.split(":", 1)[0]))
                     )
                 ):
+                    # A locked screen cannot show the Inspector, and the activation
+                    # requested behind it lands in front of the user on unlock.
+                    if Inspector.unattended():
+                        if not deferred:
+                            log.info("Conductor attachment deferred until the screen is unlocked")
+                        deferred = True
+                        self.stop.wait(1)
+                        continue
+                    deferred = False
                     try:
                         attach(self.transport)
                         log.info("Conductor native frontend attached")
