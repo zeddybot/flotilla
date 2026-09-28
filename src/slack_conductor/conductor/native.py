@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from .attachment import Attachment
+from .attachment import Attachment, frontend_version
 from .client import Client
 from .db import ConductorDB
 from .journal import Unconfirmed
@@ -77,7 +77,9 @@ class Conductor:
         self.transport = (
             Client(config.state_dir)
             if client
-            else Transport(config.state_dir, lambda current: incarnation() == current)
+            else Transport(
+                config.state_dir, lambda current: incarnation() == current, frontend_version()
+            )
         )
         self.db = NativeDB(config.conductor_db, self.transport)
         self.attachment = Attachment(self.transport)
@@ -91,14 +93,10 @@ class Conductor:
         self.attachment.start()
 
     def close(self):
+        # The frontend stays installed: the next daemon adopts it, where a detached
+        # one would cost a bootstrap that foregrounds Conductor.
         self.attachment.close()
-        try:
-            if self.transport.online():
-                self.transport.call({"op": "detach"}, timeout=3)
-        except (RuntimeError, TimeoutError):
-            pass
-        finally:
-            self.transport.close()
+        self.transport.close()
 
     def ready(self):
         if not self.transport.online():

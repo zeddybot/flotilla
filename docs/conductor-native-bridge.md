@@ -26,7 +26,11 @@ restart. Heartbeats run independently of commands. Commands and results are fenc
 by a host-issued generation and app process incarnation (PID plus launch time).
 
 The launchd daemon owns the server, attachment supervisor, Socket Mode connection,
-and status polling. Shutdown detaches the hook and restores wrapped native methods.
+and status polling. Shutdown leaves the frontend installed. The daemon records its
+loopback address, token and generation in `native-attachment.json`, and the next
+daemon serves the same address so the frontend it inherited needs no bootstrap. A
+daemon whose `frontend.js` differs starts a new generation instead, which retires
+the old frontend.
 The installer copies an exact source tree so deleted legacy modules are removed.
 The attachment worker reads fresh process identity instead of relying on AppKit's
 run-loop-dependent application cache. Focus restoration uses a fresh foreground PID

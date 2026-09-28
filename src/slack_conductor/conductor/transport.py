@@ -15,9 +15,11 @@ from .runtime import session_snapshot
 
 
 class Transport:
-    def __init__(self, state_dir, alive):
+    def __init__(self, state_dir, alive, version=""):
         self.journal = Journal(state_dir / "native.sqlite")
         self.alive = alive
+        self.version = version
+        self.record = state_dir / "native-attachment.json"
         self.lock = threading.RLock()
         self.attachment = None
         self.heartbeat = {}
@@ -120,9 +122,34 @@ class Transport:
             def do_POST(self):
                 self.handle_request(True)
 
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        # A frontend installed by the previous daemon keeps calling the address it
+        # was given. Serving that address again adopts it without a new bootstrap.
+        previous = self.previous()
+        try:
+            self.server = ThreadingHTTPServer(("127.0.0.1", previous["port"]), Handler)
+            self.token = previous["token"]
+            self.attachment = {key: previous[key] for key in ("generation", "incarnation")}
+        except (TypeError, OSError, OverflowError):
+            self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.server.daemon_threads = True
         self.worker = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    def previous(self):
+        try:
+            saved = json.loads(self.record.read_text())
+            # An upgraded daemon must not drive a frontend built for the old one.
+            if saved["version"] != self.version:
+                return None
+            return {
+                "port": int(saved["port"]),
+                **{key: str(saved[key]) for key in ("token", "generation", "incarnation")},
+            }
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    def expects(self, incarnation):
+        with self.lock:
+            return bool(self.attachment and self.attachment["incarnation"] == incarnation)
 
     def start(self):
         self.worker.start()
@@ -133,6 +160,17 @@ class Transport:
             self.heartbeat = {}
             self.bootstrap = ""
             self.served = False
+            with tempfile.NamedTemporaryFile(mode="w", dir=self.record.parent, delete=False) as f:
+                json.dump(
+                    {
+                        **self.attachment,
+                        "token": self.token,
+                        "port": self.server.server_port,
+                        "version": self.version,
+                    },
+                    f,
+                )
+            os.replace(f.name, self.record)
             return {
                 **self.attachment,
                 "base": f"http://127.0.0.1:{self.server.server_port}/{self.token}",

@@ -130,7 +130,7 @@ def test_new_app_does_not_inherit_failed_attachment_backoff(monkeypatch):
         raise RuntimeError("not ready")
 
     monkeypatch.setattr(attachment, "attach", fail)
-    worker = attachment.Attachment(SimpleNamespace(online=lambda: False))
+    worker = attachment.Attachment(SimpleNamespace(online=lambda: False, expects=lambda _: False))
     worker.stop = SimpleNamespace(
         is_set=lambda: now[0] >= 3,
         wait=lambda seconds: now.__setitem__(0, now[0] + seconds),
@@ -139,7 +139,7 @@ def test_new_app_does_not_inherit_failed_attachment_backoff(monkeypatch):
     assert attempts == [0, 1]
 
 
-def attachment_attempts(monkeypatch, online, unattended=lambda t: False):
+def attachment_attempts(monkeypatch, online, unattended=lambda t: False, inherited=False):
     import sys
     from types import SimpleNamespace
 
@@ -156,7 +156,9 @@ def attachment_attempts(monkeypatch, online, unattended=lambda t: False):
     monkeypatch.setattr(attachment.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(attachment, "incarnation", lambda: "1:app")
     monkeypatch.setattr(attachment, "attach", lambda *args: attempts.append(now[0]))
-    worker = attachment.Attachment(SimpleNamespace(online=lambda: online(now[0])))
+    worker = attachment.Attachment(
+        SimpleNamespace(online=lambda: online(now[0]), expects=lambda _: inherited)
+    )
     worker.stop = SimpleNamespace(
         is_set=lambda: now[0] >= 10,
         wait=lambda seconds: now.__setitem__(0, now[0] + seconds),
@@ -179,6 +181,20 @@ def test_wedged_frontend_reattaches_only_after_the_grace_period(monkeypatch):
 
 def test_frontend_that_never_served_attaches_without_waiting(monkeypatch):
     assert attachment_attempts(monkeypatch, lambda t: False)[0] == 0
+
+
+def test_restarted_daemon_adopts_the_frontend_it_inherited(monkeypatch, caplog):
+    import logging
+
+    from slack_conductor.conductor import attachment
+
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(attachment, "REATTACH_GRACE", 5)
+    # The frontend finds the daemon again two seconds in: no bootstrap at all.
+    assert attachment_attempts(monkeypatch, lambda t: t >= 2, inherited=True) == []
+    assert "Conductor native frontend adopted" in caplog.text
+    # A frontend that died with its page is replaced once the grace has run out.
+    assert attachment_attempts(monkeypatch, lambda t: False, inherited=True)[0] == 5
 
 
 def test_locked_screen_defers_attachment_without_spending_a_retry(monkeypatch, caplog):

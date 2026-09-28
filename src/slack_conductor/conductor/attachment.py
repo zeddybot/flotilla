@@ -1,5 +1,6 @@
 """Brief Inspector bootstrap; all agent operations use native services afterward."""
 
+import hashlib
 import json
 import logging
 import threading
@@ -20,6 +21,11 @@ FRONTEND_RELEASE = 30
 # window leaves the daemon behind the frontend's own deadline: a stall the frontend
 # survives never costs a foreground bootstrap.
 REATTACH_GRACE = FRONTEND_RELEASE
+
+
+def frontend_version():
+    source = Path(__file__).with_name("frontend.js").read_bytes()
+    return hashlib.sha256(source).hexdigest()
 
 
 def frontend_config(config):
@@ -159,16 +165,23 @@ class Attachment:
     def run(self):
         from .inspector import Inspector
 
-        failures, last_app, retry_at, offline_since, established = 0, None, 0, 0, False
-        deferred = False
+        failures, last_app, retry_at, offline_since, established = 0, None, 0, None, False
+        deferred = attached = False
         while not self.stop.is_set():
             current = incarnation()
             if current != last_app:
-                failures, last_app, retry_at, established = 0, current, 0, False
+                failures, last_app, retry_at = 0, current, 0
+                # The previous daemon's frontend earns the same grace as one that
+                # served this daemon: it only needs time to find the address again.
+                established = self.transport.expects(current)
+                if established:
+                    log.info("Waiting for the previous daemon's Conductor frontend")
             if self.transport.online():
-                failures, offline_since, established = 0, 0, True
+                if established and not attached:
+                    log.info("Conductor native frontend adopted")
+                failures, offline_since, established, attached = 0, None, True, True
             else:
-                if not offline_since:
+                if offline_since is None:
                     offline_since = time.monotonic()
                 # Only a frontend that was already serving earns the grace period;
                 # a cold start or a fresh app still attaches on the first tick.
@@ -193,7 +206,7 @@ class Attachment:
                     try:
                         attach(self.transport)
                         log.info("Conductor native frontend attached")
-                        failures = 0
+                        failures, attached = 0, True
                     except Exception as exc:
                         failures += 1
                         retry_at = time.monotonic() + 60

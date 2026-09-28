@@ -93,7 +93,7 @@ After steering pickup is confirmed, the run's status, content, and background-jo
 
 This handoff also applies when steering a run that is waiting on background work and Conductor assigns the follow-up a new native turn ID. The bridge checks job/callback state immediately before that follow-up, then transfers ownership before processing its output. A previous run that already finished its work keeps its separate reply, even if its Done update has not reached Slack yet.
 
-The private state directory contains `bridge.sqlite`, `native.sqlite` (commands and pause intent), `native-heartbeat.json`, `daemon.lock`, rotating `daemon.log`, launchd startup logs. Treat all local logs and state as private because prompts, tool descriptions, and results can contain sensitive information.
+The private state directory contains `bridge.sqlite`, `native.sqlite` (commands and pause intent), `native-heartbeat.json`, `native-attachment.json` (the loopback address and token of the installed frontend), `daemon.lock`, rotating `daemon.log`, launchd startup logs. Treat all local logs and state as private because prompts, tool descriptions, and results can contain sensitive information.
 
 Incoming Slack messages are durably deduplicated by workspace/channel/message timestamp, including overlapping mention and message events. Restart recovery resumes queued/running turns and partially delivered results. Native sends have stable IDs and a durable command journal. Recovery checks both accepted messages and the native outbox before resubmitting an interrupted operation; workspace creation also reuses its original identity. Slack and local SQLite cannot commit atomically: deterministic Slack message IDs reduce duplicate posts, but this is not an exactly-once transport.
 
