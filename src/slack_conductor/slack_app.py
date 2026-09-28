@@ -181,12 +181,35 @@ class Bridge:
             self.store.execute("UPDATE events SET state='failed' WHERE key=?", (key,))
 
 
+def identify(client, owner_id, stop):
+    delay = 1
+    while True:
+        try:
+            return client.auth_test(), client.users_info(user=owner_id)["user"]
+        except OSError as exc:
+            # Offline at login or on wake: exiting only relaunches into the same outage.
+            # A rejected token is a SlackApiError and still stops the daemon.
+            log.warning(
+                "Slack unreachable at startup (%s); retrying in %ss", type(exc).__name__, delay
+            )
+        if stop.wait(delay):
+            return None
+        delay = min(delay * 2, 60)
+
+
 def run(config, store, conductor, creds, stop):
-    app = App(token=creds["SLACK_BOT_TOKEN"], process_before_response=True)
-    auth = app.client.auth_test()
+    # Bolt's own verification calls auth.test once inside the constructor.
+    app = App(
+        token=creds["SLACK_BOT_TOKEN"],
+        process_before_response=True,
+        token_verification_enabled=False,
+    )
+    identity = identify(app.client, creds["OWNER_SLACK_USER_ID"], stop)
+    if identity is None:
+        return
+    auth, owner = identity
     if auth["team_id"] != creds["SLACK_TEAM_ID"]:
         raise RuntimeError("Slack token belongs to a different workspace")
-    owner = app.client.users_info(user=creds["OWNER_SLACK_USER_ID"])["user"]
     if owner.get("is_bot") or owner.get("deleted"):
         raise RuntimeError("Configured Slack owner is not an active human user")
     bridge = Bridge(
