@@ -35,12 +35,14 @@ The installer copies an exact source tree so deleted legacy modules are removed.
 The attachment worker reads fresh process identity instead of relying on AppKit's
 run-loop-dependent application cache. Focus restoration uses a fresh foreground PID
 and only restores focus if the bootstrap still owns it. It retries with a longer
-timeout on a slow machine, and a bootstrap that cannot read the foreground app
-does not start, because it could not hand focus back. On this Mac, helper shutdown
+timeout on a slow machine. A bootstrap that cannot read the foreground app still
+runs and leaves Conductor in front. On this Mac, helper shutdown
 or reinstallation can itself foreground Conductor before bootstrap captures focus,
 so restoration is best effort. The accepted startup tradeoff is a brief foreground
 transition; ordinary message dispatch does not interact with the UI. After a failed attachment,
-retries wait until Conductor is foreground and run at most once per minute. Process
+retries run after 1, 2 and then every 5 minutes whatever app is in front, because a
+working bridge outranks keeping focus. With the screen locked, or once Conductor is
+selected, they run every minute. Process
 changes are still observed during backoff. Inspector lookup visits shallow controls
 before deep logs, and checks AeroSpace placement even when an AXWindow exists.
 
@@ -48,11 +50,11 @@ The installation expression returns after starting the command loop. A rejected
 heartbeat retires its attachment, preventing stale loops from filling Inspector
 with failed requests. An unanswered one rests it after the release window, and a
 daemon that is shutting down rests it at once: the user's pause, resume and send
-go straight through, command polling stops, and a slow probe waits for a daemon.
+go straight through, command polling stops, and a probe every 2 seconds waits for a daemon.
 The one that answers resumes it and is told the latest action missed per session.
 Re-attaching foregrounds Conductor, so the daemon only does it after a full grace
 period of its own running time without a heartbeat; time lost to a machine stall
-does not count. Detach is idempotent; a late callback cannot unwrap a newer
+does not count, up to 2 minutes of silence. Detach is idempotent; a late callback cannot unwrap a newer
 attachment. Shutdown commands are scoped to their attachment and retired before a
 replacement can claim them, including records from older versions.
 

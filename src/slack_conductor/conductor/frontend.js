@@ -169,7 +169,7 @@
   p.beatingSince = Date.now();
   p.idle = 0;
   p.heartbeatTimer = setInterval(() => {
-    if (p.stopped || (p.resting && ++p.idle % 12)) return;
+    if (p.stopped || (p.resting && ++p.idle % 5)) return;
     request('heartbeat', {ready: true, sessions: p.sessions}).then(
       reply => {
         if (reply?.rest) return p.rest();

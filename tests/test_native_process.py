@@ -147,6 +147,8 @@ def attachment_attempts(
     tick=lambda t: 1,
     until=10,
     probe=lambda: "1:app",
+    focused=lambda t: 1,
+    fails=False,
 ):
     import sys
     from types import SimpleNamespace
@@ -158,12 +160,20 @@ def attachment_attempts(
         sys.modules,
         "slack_conductor.conductor.inspector",
         SimpleNamespace(
-            Inspector=SimpleNamespace(focused_pid=lambda: 1, unattended=lambda: unattended(now[0]))
+            Inspector=SimpleNamespace(
+                focused_pid=lambda: focused(now[0]), unattended=lambda: unattended(now[0])
+            )
         ),
     )
     monkeypatch.setattr(attachment.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(attachment, "incarnation", probe)
-    monkeypatch.setattr(attachment, "attach", lambda *args: attempts.append(now[0]))
+
+    def attach(*args):
+        attempts.append(now[0])
+        if fails:
+            raise RuntimeError("not ready")
+
+    monkeypatch.setattr(attachment, "attach", attach)
     worker = attachment.Attachment(
         SimpleNamespace(online=lambda: online(now[0]), expects=lambda _: inherited)
     )
@@ -241,21 +251,28 @@ def test_focus_is_handed_back_even_when_the_machine_is_slow(monkeypatch, caplog)
     assert calls == []
 
 
-def test_bootstrap_refuses_focus_it_could_not_hand_back(monkeypatch):
+def test_bootstrap_goes_ahead_when_the_foreground_app_is_unknown(monkeypatch, caplog):
     import sys
     from types import SimpleNamespace
 
     from slack_conductor.conductor import attachment
 
+    activated = []
+
     class Inspector:
+        pid = 9
         focused_pid = staticmethod(lambda: None)
+        activate = staticmethod(lambda *a, **kw: activated.append(a))
 
     monkeypatch.setitem(
         sys.modules, "slack_conductor.conductor.inspector", SimpleNamespace(Inspector=Inspector)
     )
-    monkeypatch.setattr(attachment, "_attach", lambda *a: pytest.fail("took focus"))
-    with pytest.raises(RuntimeError, match="Foreground app unknown"):
-        attachment.attach(object())
+    attached = []
+    monkeypatch.setattr(attachment, "_attach", lambda *a: attached.append(a))
+    attachment.attach(object())
+    assert len(attached) == 1
+    assert activated == []
+    assert "Conductor will stay in front" in caplog.text
 
 
 def test_frontmost_probe_timeout_reads_as_unknown(monkeypatch):
@@ -282,13 +299,38 @@ def test_attachment_worker_survives_a_failed_probe(monkeypatch, caplog):
     assert "Conductor attachment check failed" in caplog.text
 
 
-def test_locked_screen_defers_attachment_without_spending_a_retry(monkeypatch, caplog):
-    import logging
+def test_failed_bootstrap_is_retried_without_waiting_for_conductor_to_be_selected(monkeypatch):
+    # Another app stays in front throughout: the bridge still comes back.
+    attempts = attachment_attempts(
+        monkeypatch, lambda t: False, focused=lambda t: 2, fails=True, until=800
+    )
+    assert attempts == [0, 60, 180, 480, 780]
 
-    caplog.set_level(logging.INFO)
-    attempts = attachment_attempts(monkeypatch, lambda t: False, unattended=lambda t: t < 4)
-    assert attempts[0] == 4
-    assert caplog.text.count("deferred until the screen is unlocked") == 1
+
+def test_selecting_conductor_or_a_locked_screen_retries_every_minute(monkeypatch):
+    selected = attachment_attempts(
+        monkeypatch, lambda t: False, focused=lambda t: 1 if t >= 200 else 2, fails=True, until=330
+    )
+    assert selected == [0, 60, 180, 240, 300]
+    locked = attachment_attempts(
+        monkeypatch,
+        lambda t: False,
+        unattended=lambda t: True,
+        focused=lambda t: 594,
+        fails=True,
+        until=200,
+    )
+    assert locked == [0, 60, 120, 180]
+
+
+def test_repeated_stalls_cannot_postpone_the_bootstrap_forever(monkeypatch):
+    from slack_conductor.conductor import attachment
+
+    monkeypatch.setattr(attachment, "REATTACH_GRACE", 30)
+    monkeypatch.setattr(attachment, "SILENCE_LIMIT", 100)
+    # First heard silent at t=10 and stalling on every tick, so the grace never completes.
+    attempts = attachment_attempts(monkeypatch, lambda t: t < 1, tick=lambda t: 10, until=200)
+    assert attempts[0] == 110
 
 
 def test_lock_state_is_read_from_the_login_session(monkeypatch):
