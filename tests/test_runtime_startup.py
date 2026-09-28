@@ -1,6 +1,6 @@
 """Startup failures release acquired resources without launching real agents."""
 
-import threading
+from itertools import pairwise
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -12,8 +12,25 @@ from slack_conductor.connection_health import ConnectionHealth
 from slack_conductor.store import Store
 
 
-@pytest.mark.parametrize("failure", ["reconcile", "socket_construct", "connect", "health", "none"])
-def test_acquired_resources_close_even_when_startup_fails(tmp_path, monkeypatch, failure):
+class Clock:
+    """A stop event whose waits advance the service loop's clock instead of sleeping."""
+
+    def __init__(self, monkeypatch):
+        self.now, self.stopped = 0, False
+        monkeypatch.setattr(slack_app.time, "monotonic", lambda: self.now)
+
+    def is_set(self):
+        return self.stopped
+
+    def set(self):
+        self.stopped = True
+
+    def wait(self, seconds):
+        self.now += seconds
+        return self.stopped
+
+
+def service(tmp_path, monkeypatch, attempt, stop):
     store = Store(tmp_path / "bridge.sqlite")
     closed = []
     client = SimpleNamespace(
@@ -27,21 +44,15 @@ def test_acquired_resources_close_even_when_startup_fails(tmp_path, monkeypatch,
         "App",
         lambda **_: SimpleNamespace(client=client, event=lambda _: lambda callback: callback),
     )
-
-    def attempt(stage):
-        if failure == "health" and stage == "connect":
-            for _ in range(5):
-                for listener in client.on_error_listeners:
-                    listener(BrokenPipeError())
-        if failure == stage:
-            raise RuntimeError(stage)
-
-    monkeypatch.setattr(slack_app.Poller, "reconcile", lambda _: attempt("reconcile"))
+    monkeypatch.setattr(slack_app.Poller, "reconcile", lambda _: attempt("reconcile", client))
+    monkeypatch.setattr(slack_app.Poller, "tick", lambda _: attempt("tick", client))
 
     def handler(*_):
-        attempt("socket_construct")
+        attempt("socket_construct", client)
         return SimpleNamespace(
-            client=client, connect=lambda: attempt("connect"), close=lambda: closed.append("socket")
+            client=client,
+            connect=lambda: attempt("connect", client),
+            close=lambda: closed.append("socket"),
         )
 
     monkeypatch.setattr(slack_app, "SocketModeHandler", handler)
@@ -61,9 +72,6 @@ def test_acquired_resources_close_even_when_startup_fails(tmp_path, monkeypatch,
     conductor = SimpleNamespace(
         db=None, start=Mock(), ready=Mock(), close=lambda: closed.append("native")
     )
-    stop = threading.Event()
-    if failure != "health":
-        stop.set()
     args = (
         Config(),
         store,
@@ -76,21 +84,75 @@ def test_acquired_resources_close_even_when_startup_fails(tmp_path, monkeypatch,
         },
         stop,
     )
-    if failure == "none":
-        slack_app.run(*args)
-    elif failure == "health":
-        with pytest.raises(ConnectionError, match="Socket Mode stalled"):
-            slack_app.run(*args)
-        conductor.ready.assert_not_called()
-    else:
+    return args, conductor, closed
+
+
+@pytest.mark.parametrize("failure", ["reconcile", "socket_construct", "connect", "none"])
+def test_acquired_resources_close_even_when_startup_fails(tmp_path, monkeypatch, failure):
+    stop = Clock(monkeypatch)
+
+    def attempt(stage, _client):
+        if stage in {failure, "tick"}:
+            stop.set()
+        if failure == stage:
+            raise RuntimeError(stage)
+
+    args, conductor, closed = service(tmp_path, monkeypatch, attempt, stop)
+    if failure == "reconcile":
         with pytest.raises(RuntimeError, match=failure):
             slack_app.run(*args)
+    else:
+        slack_app.run(*args)
     assert closed == (
         ["native"]
         if failure in {"reconcile", "socket_construct"}
         else ["health", "socket", "native"]
     )
     conductor.start.assert_called_once_with({})
+
+
+def test_failed_connection_is_replaced_without_restarting_the_daemon(tmp_path, monkeypatch):
+    stop = Clock(monkeypatch)
+    connections, dispatched = [], []
+
+    def attempt(stage, client):
+        if stage == "connect":
+            connections.append(stop.now)
+            if len(connections) == 1:
+                for _ in range(5):
+                    for listener in client.on_error_listeners:
+                        listener(BrokenPipeError())
+        if stage == "tick":
+            dispatched.append(len(connections))
+            stop.set()
+
+    args, _conductor, closed = service(tmp_path, monkeypatch, attempt, stop)
+    slack_app.run(*args)
+    assert len(connections) == 2
+    # Nothing is dispatched over the connection that failed.
+    assert dispatched == [2]
+    assert closed == ["health", "socket", "health", "socket", "native"]
+
+
+def test_sustained_outage_still_ends_in_a_fresh_process(tmp_path, monkeypatch, caplog):
+    stop = Clock(monkeypatch)
+    attempts = []
+
+    def attempt(stage, _client):
+        if stage == "connect":
+            attempts.append(stop.now)
+            raise OSError("offline")
+        assert stage != "tick"
+
+    args, _conductor, closed = service(tmp_path, monkeypatch, attempt, stop)
+    with pytest.raises(ConnectionError, match="Socket Mode stalled"):
+        slack_app.run(*args)
+    assert stop.now == pytest.approx(slack_app.Link.OUTAGE_LIMIT, abs=2)
+    gaps = [later - earlier for earlier, later in pairwise(attempts)]
+    assert gaps[:3] == pytest.approx([1, 2, 4], abs=1) and max(gaps) <= 61
+    assert "Slack connection attempt failed (OSError)" in caplog.text
+    assert "offline" not in caplog.text
+    assert closed[-1] == "native"
 
 
 def test_offline_startup_waits_for_slack_instead_of_exiting(caplog):
