@@ -186,8 +186,9 @@ class Link:
     """Socket Mode connection, replaced in-process when it stalls."""
 
     # In-process replacement once failed for hours until the daemon was restarted,
-    # so an outage this long still ends in a fresh process.
-    OUTAGE_LIMIT = 600
+    # and a restart is the recovery that is proven. It is cheap now that the next
+    # daemon adopts the frontend, so it follows a short outage.
+    OUTAGE_LIMIT = 180
 
     def __init__(self, app, token, stop):
         self.app, self.token, self.stop = app, token, stop

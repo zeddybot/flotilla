@@ -21,6 +21,12 @@ FRONTEND_RELEASE = 30
 REATTACH_GRACE = FRONTEND_RELEASE
 # A tick slower than this means the machine stalled, and the frontend with it.
 STALL = 3
+# Stalls restart the grace. Past this much silence the bootstrap goes ahead anyway.
+SILENCE_LIMIT = 120
+# A working bridge outranks keeping focus, so a failed bootstrap is retried on this
+# schedule whatever app is in front. Nobody is watching a locked screen, and
+# selecting Conductor gives the focus away already: both retry at the first delay.
+RETRY_DELAYS = (60, 120, 300)
 
 
 def frontend_version():
@@ -61,7 +67,7 @@ def attach(transport):
     ax = Inspector()
     front = Inspector.focused_pid()
     if front is None:
-        raise RuntimeError("Foreground app unknown; not taking focus that cannot be handed back")
+        log.warning("Foreground app unknown; Conductor will stay in front after the bootstrap")
     log.info("Attaching Conductor frontend; previous app PID %s", front)
     try:
         _attach(transport, ax)
@@ -72,7 +78,7 @@ def attach(transport):
 def restore(inspector, front, conductor):
     # Runs on a machine slow enough to have needed a bootstrap. Raising here would
     # leave Conductor in front and report a bootstrap that worked as failed.
-    if conductor and front != conductor:
+    if front and conductor and front != conductor:
         for _ in range(3):
             try:
                 inspector.activate(front, only_if=conductor, timeout=15)
@@ -80,6 +86,14 @@ def restore(inspector, front, conductor):
             except subprocess.TimeoutExpired:
                 log.warning("Handing focus back to PID %s timed out", front)
     log.info("Conductor bootstrap finished; foreground app PID %s", inspector.focused_pid())
+
+
+def retry_delay(inspector, failures):
+    try:
+        unattended = inspector.unattended()
+    except Exception:  # noqa: BLE001 - an unreadable session must not stop the retries
+        unattended = False
+    return RETRY_DELAYS[0 if unattended else min(failures, len(RETRY_DELAYS)) - 1]
 
 
 def _attach(transport, ax):
@@ -180,9 +194,10 @@ class Attachment:
             "failures": 0,
             "app": None,
             "retry_at": 0,
+            "attempted_at": 0,
             "offline_since": None,
+            "silent_since": None,
             "established": False,
-            "deferred": False,
             "attached": False,
             "waited": 0,
         }
@@ -193,6 +208,16 @@ class Attachment:
                 # Nothing restarts this worker, so one failed probe must not end it.
                 log.exception("Conductor attachment check failed")
                 self.stop.wait(1)
+
+    def due(self, state, current, inspector):
+        now = time.monotonic()
+        if not state["failures"] or now >= state["retry_at"]:
+            return True
+        return bool(
+            now >= state["attempted_at"] + RETRY_DELAYS[0]
+            and current
+            and inspector.focused_pid() == int(current.split(":", 1)[0])
+        )
 
     def tick(self, state):
         from .inspector import Inspector
@@ -211,44 +236,36 @@ class Attachment:
         if online:
             if state["established"] and not state["attached"]:
                 log.info("Conductor native frontend adopted")
-            state.update(failures=0, offline_since=None, established=True, attached=True)
+            state.update(
+                failures=0, offline_since=None, silent_since=None, established=True, attached=True
+            )
         else:
+            now = time.monotonic()
+            if state["silent_since"] is None:
+                state["silent_since"] = now
             # Silence during a stall says nothing about the frontend, so the
             # grace only counts time the daemon was running to hear from it.
             if state["offline_since"] is None or stalled:
-                state["offline_since"] = time.monotonic()
+                state["offline_since"] = now
             # Only a frontend that was already serving earns the grace period;
             # a cold start or a fresh app still attaches on the first tick.
             settled = (
                 not state["established"]
-                or time.monotonic() - state["offline_since"] >= REATTACH_GRACE
+                or now - state["offline_since"] >= REATTACH_GRACE
+                or now - state["silent_since"] >= SILENCE_LIMIT
             )
-            if (
-                settled
-                and time.monotonic() >= state["retry_at"]
-                and (
-                    not state["failures"]
-                    or (current and Inspector.focused_pid() == int(current.split(":", 1)[0]))
-                )
-            ):
-                # A locked screen cannot show the Inspector, and the activation
-                # requested behind it lands in front of the user on unlock.
-                if Inspector.unattended():
-                    if not state["deferred"]:
-                        log.info("Conductor attachment deferred until the screen is unlocked")
-                    state["deferred"] = True
-                else:
-                    state["deferred"] = False
-                    try:
-                        attach(self.transport)
-                        log.info("Conductor native frontend attached")
-                        state.update(failures=0, attached=True)
-                    except Exception as exc:
-                        state["failures"] += 1
-                        state["retry_at"] = time.monotonic() + 60
-                        log.warning("Conductor attachment pending: %s", exc, exc_info=True)
-        # After a failed bootstrap, retries cannot repeatedly foreground the
-        # app: wait for the user to select it, and retry at most once a minute.
+            if settled and self.due(state, current, Inspector):
+                try:
+                    attach(self.transport)
+                    log.info("Conductor native frontend attached")
+                    state.update(failures=0, attached=True)
+                except Exception as exc:
+                    state["failures"] += 1
+                    state["attempted_at"] = time.monotonic()
+                    state["retry_at"] = state["attempted_at"] + retry_delay(
+                        Inspector, state["failures"]
+                    )
+                    log.warning("Conductor attachment pending: %s", exc, exc_info=True)
         # Keep observing process changes during backoff so a new app launch
         # or crash does not inherit the old frontend's retry delay.
         before = time.monotonic()
