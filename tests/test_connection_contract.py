@@ -118,3 +118,98 @@ def test_concurrent_consumers_claim_each_command_once(tmp_path):
         first, second = pool.map(claim_all, range(2))
     assert len(first + second) == 20
     assert set(first + second) == {str(i) for i in range(20)}
+
+
+def request(config, route):
+    url = urlparse(config["base"])
+    connection = HTTPConnection(url.hostname, url.port, timeout=2)
+    try:
+        connection.request("GET", f"{url.path}/{route}?generation={config['generation']}")
+        response = connection.getresponse()
+        response.read()
+        return response.status
+    finally:
+        connection.close()
+
+
+def served(tmp_path, alive):
+    transport = Transport(tmp_path, alive, "v1")
+    transport.start()
+    try:
+        return transport.attach("app")
+    finally:
+        transport.close()
+
+
+def restarted(tmp_path, config, version="v1"):
+    transport = Transport(tmp_path, lambda app: app == "app", version)
+    transport.start()
+    try:
+        return transport.attachment, request(config, "valid")
+    finally:
+        transport.close()
+
+
+def test_restarted_daemon_serves_the_address_its_frontend_already_has(tmp_path):
+    config = served(tmp_path, lambda app: app == "app")
+    assert (tmp_path / "native-attachment.json").stat().st_mode & 0o077 == 0
+    attachment, status = restarted(tmp_path, config)
+    assert attachment == {"generation": config["generation"], "incarnation": "app"}
+    assert status == 200
+
+
+def test_upgraded_daemon_retires_the_old_frontend(tmp_path):
+    config = served(tmp_path, lambda app: app == "app")
+    upgraded = Transport(tmp_path, lambda app: app == "app", "v2")
+    upgraded.start()
+    try:
+        assert upgraded.attachment is None
+        assert upgraded.token not in config["base"]
+    finally:
+        upgraded.close()
+
+
+def test_restarted_conductor_is_never_adopted(tmp_path):
+    config = served(tmp_path, lambda app: app == "relaunched")
+    second = Transport(tmp_path, lambda app: app == "relaunched", "v1")
+    second.start()
+    try:
+        assert not second.expects("relaunched")
+        assert request(config, "valid") == 409
+    finally:
+        second.close()
+
+
+OUT_OF_RANGE = json.dumps(
+    {"port": 70000, "token": "t", "generation": "g", "incarnation": "app", "version": ""}
+)
+
+
+@pytest.mark.parametrize(
+    "record", ["", "[]", "{}", '{"port": "x"}', '{"port": 1, "version": ""}', OUT_OF_RANGE]
+)
+def test_unreadable_attachment_record_starts_fresh(tmp_path, record):
+    (tmp_path / "native-attachment.json").write_text(record)
+    transport = Transport(tmp_path, lambda _: True)
+    transport.start()
+    try:
+        assert transport.attachment is None
+        assert transport.attach("app")["generation"]
+    finally:
+        transport.close()
+
+
+def test_occupied_address_starts_fresh_instead_of_failing(tmp_path):
+    import socket
+
+    config = served(tmp_path, lambda _: True)
+    with socket.socket() as squatter:
+        squatter.bind(("127.0.0.1", urlparse(config["base"]).port))
+        squatter.listen()
+        transport = Transport(tmp_path, lambda _: True, "v1")
+        transport.start()
+        try:
+            assert transport.attachment is None
+            assert transport.server.server_port != squatter.getsockname()[1]
+        finally:
+            transport.close()
