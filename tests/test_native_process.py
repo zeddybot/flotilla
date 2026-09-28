@@ -139,7 +139,9 @@ def test_new_app_does_not_inherit_failed_attachment_backoff(monkeypatch):
     assert attempts == [0, 1]
 
 
-def attachment_attempts(monkeypatch, online, unattended=lambda t: False, inherited=False):
+def attachment_attempts(
+    monkeypatch, online, unattended=lambda t: False, inherited=False, tick=lambda t: 1, until=10
+):
     import sys
     from types import SimpleNamespace
 
@@ -160,8 +162,8 @@ def attachment_attempts(monkeypatch, online, unattended=lambda t: False, inherit
         SimpleNamespace(online=lambda: online(now[0]), expects=lambda _: inherited)
     )
     worker.stop = SimpleNamespace(
-        is_set=lambda: now[0] >= 10,
-        wait=lambda seconds: now.__setitem__(0, now[0] + seconds),
+        is_set=lambda: now[0] >= until,
+        wait=lambda seconds: now.__setitem__(0, now[0] + tick(now[0])),
     )
     worker.run()
     return attempts
@@ -177,6 +179,18 @@ def test_wedged_frontend_reattaches_only_after_the_grace_period(monkeypatch):
     # Serving until t=1, then silent: a stalled machine freezes the frontend and
     # the daemon together, so foregrounding the app has to wait out the recovery.
     assert attachment_attempts(monkeypatch, lambda t: t < 1)[0] == 4
+
+
+def test_a_stalled_machine_does_not_spend_the_grace_period(monkeypatch):
+    from slack_conductor.conductor import attachment
+
+    monkeypatch.setattr(attachment, "REATTACH_GRACE", 5)
+    # Silent from t=1, frozen from t=3 to t=23: the frontend was frozen too, so it
+    # still gets a full grace of running time to find the daemon again.
+    attempts = attachment_attempts(
+        monkeypatch, lambda t: t < 1, tick=lambda t: 20 if t == 3 else 1, until=40
+    )
+    assert attempts[0] == 28
 
 
 def test_frontend_that_never_served_attaches_without_waiting(monkeypatch):

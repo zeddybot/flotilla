@@ -213,3 +213,38 @@ def test_occupied_address_starts_fresh_instead_of_failing(tmp_path):
             assert transport.server.server_port != squatter.getsockname()[1]
         finally:
             transport.close()
+
+
+def test_shutdown_tells_the_frontend_to_rest_and_stops_counting_it_online(tmp_path):
+    transport = Transport(tmp_path, lambda _: True, "v1")
+    transport.start()
+    config = transport.attach("app")
+    url = urlparse(config["base"])
+
+    def beat():
+        connection = HTTPConnection(url.hostname, url.port, timeout=2)
+        try:
+            connection.request(
+                "POST",
+                url.path + "/heartbeat",
+                body=json.dumps({"generation": config["generation"], "ready": True}),
+            )
+            return json.loads(connection.getresponse().read())
+        finally:
+            connection.close()
+
+    try:
+        transport.rest(timeout=0)
+        assert not transport.rested.is_set()
+        transport.resting = False
+        assert beat() is True
+        assert transport.online()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            resting = pool.submit(transport.rest, 5)
+            while not transport.resting:
+                pass
+            assert beat() == {"rest": True}
+            resting.result(timeout=5)
+        assert not transport.online()
+    finally:
+        transport.close()

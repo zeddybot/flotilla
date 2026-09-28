@@ -28,6 +28,8 @@ observable behavior while allowing those components to move.
 | Background callbacks, interrupted jobs, restart, no premature Done | `test_lifecycle.py`, `test_native_recovery.py` |
 | Exact model/engine aliases, fallback, configuration frozen after acceptance | `test_native_adapter.py` |
 | Actual JS dispatcher: configuration, queue/steer IDs, target rejection, pause intent, detach | `native_frontend.mjs`, invoked by pytest |
+| Actual JS heartbeat: stall tolerance, rest and resume, missed intent, superseded detach | `native_heartbeat.mjs`, invoked by pytest |
+| Daemon restart adopts the installed frontend; upgrade, relaunch and occupied address start fresh | `test_connection_contract.py`, `test_native_process.py` |
 | Concurrent command claims, durable pause, lost acknowledgment, stale generations | `test_native_journal.py`, `test_connection_contract.py` |
 | Fresh app/session observation; malformed localhost requests | `test_connection_contract.py`, `test_native_process.py` |
 | Slack status delivery without Conductor SQL | `test_observation_contract.py` |

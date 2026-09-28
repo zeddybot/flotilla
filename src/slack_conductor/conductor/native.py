@@ -96,6 +96,7 @@ class Conductor:
         # The frontend stays installed: the next daemon adopts it, where a detached
         # one would cost a bootstrap that foregrounds Conductor.
         self.attachment.close()
+        self.transport.rest()
         self.transport.close()
 
     def ready(self):

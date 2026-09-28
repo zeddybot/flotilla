@@ -26,6 +26,8 @@ class Transport:
         self.bindings = {}
         self.bootstrap = ""
         self.served = False
+        self.resting = False
+        self.rested = threading.Event()
         self.token = secrets.token_urlsafe(32)
         owner = self
 
@@ -83,6 +85,10 @@ class Transport:
                                 owner.bindings[result["body"]["sid"]] = result["body"]["wid"]
                         elif route == "valid" and not post:
                             result = True
+                        elif route == "heartbeat" and post and owner.resting:
+                            owner.rested.set()
+                            self.reply({"rest": True})
+                            return
                         elif route == "heartbeat" and post:
                             owner.heartbeat = {**body, "received_at": time.monotonic()}
                             with tempfile.NamedTemporaryFile(
@@ -210,6 +216,15 @@ class Transport:
                 body = {**body, "target_generation": self.attachment["generation"]}
             self.journal.enqueue(key, body)
         return self.journal.wait(key, timeout)
+
+    def rest(self, timeout=2):
+        """Release the composer for the shutdown; the next daemon resumes the frontend."""
+        with self.lock:
+            serving = self.online()
+            self.resting = True
+            self.heartbeat = {}
+        if serving:
+            self.rested.wait(timeout)
 
     def close(self):
         self.server.shutdown()

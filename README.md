@@ -146,7 +146,7 @@ Targeted tests: `uv run pytest tests/test_db.py tests/test_bridge.py -q`. CI che
 
 ## Native recovery
 
-Queue pause/resume intent is written durably before the native action is acknowledged. Reattachment restores that intent, so a newer stop wins over an older send retry. A pre-existing queue with unknown intent is left paused. A new explicit send follows Conductor’s normal resume behavior. Slack shows a paused queued message as Needs attention.
+Queue pause/resume intent is written durably before the native action is acknowledged. Reattachment restores that intent, so a newer stop wins over an older send retry. While the daemon is away the frontend applies your actions directly and reports the latest one per session when a daemon returns. A pre-existing queue with unknown intent is left paused. A new explicit send follows Conductor’s normal resume behavior. Slack shows a paused queued message as Needs attention.
 
 Quitting Conductor may kill its background shell jobs; the bridge does not rerun their commands automatically. It reconciles the live runner and transcript and updates Slack accordingly. Recovering lost plan-mode approval callbacks is out of scope.
 

@@ -12,15 +12,14 @@ from .process import incarnation
 log = logging.getLogger(__name__)
 
 BOOTSTRAP_PREFIX = "(()=>{const r=new XMLHttpRequest();"
-# How long the frontend keeps retrying unacknowledged heartbeats before releasing
-# itself. Injected into its config so both ends share one number.
+# How long the frontend keeps intercepting without an acknowledged heartbeat before
+# it rests. Injected into its config so both ends share one number.
 FRONTEND_RELEASE = 30
-# A stalled machine freezes the daemon and the frontend together, and re-attaching
-# foregrounds Conductor to replace a frontend that was only wedged. online() already
-# tolerates 5s of staleness before this grace starts, so waiting the full release
-# window leaves the daemon behind the frontend's own deadline: a stall the frontend
-# survives never costs a foreground bootstrap.
+# Re-attaching foregrounds Conductor, so it is reserved for a frontend that is gone.
+# One that is only wedged or resting finds the daemon again within this grace.
 REATTACH_GRACE = FRONTEND_RELEASE
+# A tick slower than this means the machine stalled, and the frontend with it.
+STALL = 3
 
 
 def frontend_version():
@@ -167,8 +166,12 @@ class Attachment:
 
         failures, last_app, retry_at, offline_since, established = 0, None, 0, None, False
         deferred = attached = False
+        waited = 0
         while not self.stop.is_set():
+            started = time.monotonic()
             current = incarnation()
+            online = self.transport.online()
+            stalled = max(waited, time.monotonic() - started) > STALL
             if current != last_app:
                 failures, last_app, retry_at = 0, current, 0
                 # The previous daemon's frontend earns the same grace as one that
@@ -176,12 +179,14 @@ class Attachment:
                 established = self.transport.expects(current)
                 if established:
                     log.info("Waiting for the previous daemon's Conductor frontend")
-            if self.transport.online():
+            if online:
                 if established and not attached:
                     log.info("Conductor native frontend adopted")
                 failures, offline_since, established, attached = 0, None, True, True
             else:
-                if offline_since is None:
+                # Silence during a stall says nothing about the frontend, so the
+                # grace only counts time the daemon was running to hear from it.
+                if offline_since is None or stalled:
                     offline_since = time.monotonic()
                 # Only a frontend that was already serving earns the grace period;
                 # a cold start or a fresh app still attaches on the first tick.
@@ -200,22 +205,23 @@ class Attachment:
                         if not deferred:
                             log.info("Conductor attachment deferred until the screen is unlocked")
                         deferred = True
-                        self.stop.wait(1)
-                        continue
-                    deferred = False
-                    try:
-                        attach(self.transport)
-                        log.info("Conductor native frontend attached")
-                        failures, attached = 0, True
-                    except Exception as exc:
-                        failures += 1
-                        retry_at = time.monotonic() + 60
-                        log.warning("Conductor attachment pending: %s", exc, exc_info=True)
+                    else:
+                        deferred = False
+                        try:
+                            attach(self.transport)
+                            log.info("Conductor native frontend attached")
+                            failures, attached = 0, True
+                        except Exception as exc:
+                            failures += 1
+                            retry_at = time.monotonic() + 60
+                            log.warning("Conductor attachment pending: %s", exc, exc_info=True)
             # After a failed bootstrap, retries cannot repeatedly foreground the
             # app: wait for the user to select it, and retry at most once a minute.
             # Keep observing process changes during backoff so a new app launch
             # or crash does not inherit the old frontend's retry delay.
+            before = time.monotonic()
             self.stop.wait(1)
+            waited = time.monotonic() - before
 
     def close(self):
         self.stop.set()

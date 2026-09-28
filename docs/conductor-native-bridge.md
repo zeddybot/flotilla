@@ -42,9 +42,15 @@ retries wait until Conductor is foreground and run at most once per minute. Proc
 changes are still observed during backoff. Inspector lookup visits shallow controls
 before deep logs, and checks AeroSpace placement even when an AXWindow exists.
 
-The installation expression returns after starting the command loop. A disconnected
+The installation expression returns after starting the command loop. A rejected
 heartbeat retires its attachment, preventing stale loops from filling Inspector
-with failed requests. Detach is idempotent; a late callback cannot unwrap a newer
+with failed requests. An unanswered one rests it after the release window, and a
+daemon that is shutting down rests it at once: the user's pause, resume and send
+go straight through, command polling stops, and a slow probe waits for a daemon.
+The one that answers resumes it and is told the latest action missed per session.
+Re-attaching foregrounds Conductor, so the daemon only does it after a full grace
+period of its own running time without a heartbeat; time lost to a machine stall
+does not count. Detach is idempotent; a late callback cannot unwrap a newer
 attachment. Shutdown commands are scoped to their attachment and retired before a
 replacement can claim them, including records from older versions.
 

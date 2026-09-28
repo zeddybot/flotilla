@@ -20,7 +20,7 @@
   await workspace.getWorkspaces();
   await workspace.dependencies.repo.getRepos();
   window.__flotilla?.detach();
-  const p = {stopped: false, sessions: {}, bindings: {...config.bindings}, watches: {}, serial: {}};
+  const p = {stopped: false, resting: false, missed: {}, sessions: {}, bindings: {...config.bindings}, watches: {}, serial: {}};
   window.__flotilla = p;
   class Disconnected extends Error {
     // A rejected generation is terminal; an unanswered request may still be a stall.
@@ -51,8 +51,11 @@
   const record = (sid, paused, id = crypto.randomUUID()) => request('pause', {sid, paused, request: id});
   // Write intent before the native action. Recovery uses this record, never a
   // sampled UI flag that could predate the user's stop/pause click.
+  // While the daemon is away the user's own actions go straight through, and the
+  // latest one per session is kept for the journal to learn on return.
   composer.setPaused = function (args) {
     if (!p.bindings[args.sessionId]) return originalPause.call(this, args);
+    if (p.resting) { p.missed[args.sessionId] = args.paused; return originalPause.call(this, args); }
     return serial(args.sessionId, async () => {
       await record(args.sessionId, args.paused);
       await lease();
@@ -61,6 +64,7 @@
   };
   composer.sendMessage = function (args) {
     if (!p.bindings[args.sessionId]) return originalSend.call(this, args);
+    if (p.resting) { p.missed[args.sessionId] = false; return originalSend.call(this, args); }
     return serial(args.sessionId, async () => {
       await record(args.sessionId, false);
       await lease();
@@ -136,8 +140,17 @@
     for (const w of Object.values(p.watches)) w.cancel?.();
     if (window.__flotilla === p) delete window.__flotilla;
   };
+  p.rest = () => { if (!p.stopped) p.resting = true; };
+  const resume = () => {
+    if (p.stopped || !p.resting) return;
+    p.resting = false;
+    for (const [sid, paused] of Object.entries(p.missed)) {
+      delete p.missed[sid];
+      serial(sid, () => record(sid, paused)).catch(() => { p.missed[sid] ??= paused; });
+    }
+  };
   p.statusTimer = setInterval(async () => {
-    if (p.stopped || p.reading) return;
+    if (p.stopped || p.resting || p.reading) return;
     p.reading = true;
     try {
       await Promise.all(Object.keys(p.watches).map(async sid => {
@@ -149,21 +162,31 @@
     } finally { p.reading = false; }
   }, 1000);
   // Heartbeats overlap under load, so an outage is measured from the last
-  // acknowledgement rather than counted in failures. The daemon owns the release
-  // window and stays just past it, so a wedged machine costs no foreground
-  // bootstrap, while a daemon that never returns still releases the composer.
+  // acknowledgement rather than counted in failures. An outage past the release
+  // window, or a daemon that says it is shutting down, rests this attachment: it
+  // stops intercepting and keeps probing, so the daemon that answers next resumes
+  // it without a bootstrap that would foreground Conductor.
   p.beatingSince = Date.now();
+  p.idle = 0;
   p.heartbeatTimer = setInterval(() => {
-    if (p.stopped) return;
+    if (p.stopped || (p.resting && ++p.idle % 12)) return;
     request('heartbeat', {ready: true, sessions: p.sessions}).then(
-      () => { p.beatingSince = Date.now(); },
-      error => { if (error.superseded || Date.now() - p.beatingSince >= config.release) p.detach(); }
+      reply => {
+        if (reply?.rest) return p.rest();
+        p.beatingSince = Date.now();
+        resume();
+      },
+      error => {
+        if (error.superseded) p.detach();
+        else if (Date.now() - p.beatingSince >= config.release) p.rest();
+      }
     );
   }, 400);
   // The Inspector evaluation must finish once installed; returning the lifetime
   // promise can hold subsequent console evaluations behind this attachment.
   void (async () => {
   while (!p.stopped) {
+    if (p.resting) { await new Promise(r => setTimeout(r, 500)); continue; }
     try {
       const c = await request('next');
       if (c) {
