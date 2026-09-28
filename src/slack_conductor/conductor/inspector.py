@@ -201,7 +201,7 @@ class Inspector:
             if value:
                 return value
             time.sleep(0.15)
-        raise RuntimeError(message)
+        raise RuntimeError(message() if callable(message) else message)
 
     def select_all(self):
         for down in (True, False):
