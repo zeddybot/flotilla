@@ -43,19 +43,22 @@ class Inspector:
     def focused_pid():
         # A fresh short-lived process avoids AppKit's stale application cache in
         # the daemon. Reading NSWorkspace does not send Apple events to other apps.
-        result = subprocess.run(
-            [
-                "/usr/bin/osascript",
-                "-l",
-                "JavaScript",
-                "-e",
-                "ObjC.import('AppKit'); $.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
+        try:
+            result = subprocess.run(
+                [
+                    "/usr/bin/osascript",
+                    "-l",
+                    "JavaScript",
+                    "-e",
+                    "ObjC.import('AppKit'); $.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return None
         value = result.stdout.strip()
         return int(value) if result.returncode == 0 and value.isdigit() else None
 
@@ -71,7 +74,7 @@ class Inspector:
         )
 
     @staticmethod
-    def activate(pid, only_if=None):
+    def activate(pid, only_if=None, timeout=5):
         condition = (
             f"$.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier == {int(only_if)}"
             if only_if
@@ -90,7 +93,7 @@ class Inspector:
                 ),
             ],
             capture_output=True,
-            timeout=5,
+            timeout=timeout,
             check=False,
         )
 

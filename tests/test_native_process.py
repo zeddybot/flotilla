@@ -140,7 +140,13 @@ def test_new_app_does_not_inherit_failed_attachment_backoff(monkeypatch):
 
 
 def attachment_attempts(
-    monkeypatch, online, unattended=lambda t: False, inherited=False, tick=lambda t: 1, until=10
+    monkeypatch,
+    online,
+    unattended=lambda t: False,
+    inherited=False,
+    tick=lambda t: 1,
+    until=10,
+    probe=lambda: "1:app",
 ):
     import sys
     from types import SimpleNamespace
@@ -156,7 +162,7 @@ def attachment_attempts(
         ),
     )
     monkeypatch.setattr(attachment.time, "monotonic", lambda: now[0])
-    monkeypatch.setattr(attachment, "incarnation", lambda: "1:app")
+    monkeypatch.setattr(attachment, "incarnation", probe)
     monkeypatch.setattr(attachment, "attach", lambda *args: attempts.append(now[0]))
     worker = attachment.Attachment(
         SimpleNamespace(online=lambda: online(now[0]), expects=lambda _: inherited)
@@ -209,6 +215,71 @@ def test_restarted_daemon_adopts_the_frontend_it_inherited(monkeypatch, caplog):
     assert "Conductor native frontend adopted" in caplog.text
     # A frontend that died with its page is replaced once the grace has run out.
     assert attachment_attempts(monkeypatch, lambda t: False, inherited=True)[0] == 5
+
+
+def test_focus_is_handed_back_even_when_the_machine_is_slow(monkeypatch, caplog):
+    import subprocess
+    from types import SimpleNamespace
+
+    from slack_conductor.conductor import attachment
+
+    calls = []
+
+    def activate(pid, only_if, timeout):
+        calls.append((pid, only_if, timeout))
+        if len(calls) < 3:
+            raise subprocess.TimeoutExpired("osascript", timeout)
+
+    inspector = SimpleNamespace(activate=activate, focused_pid=lambda: 7)
+    attachment.restore(inspector, 7, 9)
+    assert calls == [(7, 9, 15)] * 3
+    assert caplog.text.count("Handing focus back to PID 7 timed out") == 2
+
+    calls.clear()
+    inspector.activate = lambda *a, **kw: calls.append(a)
+    attachment.restore(inspector, 9, 9)
+    assert calls == []
+
+
+def test_bootstrap_refuses_focus_it_could_not_hand_back(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from slack_conductor.conductor import attachment
+
+    class Inspector:
+        focused_pid = staticmethod(lambda: None)
+
+    monkeypatch.setitem(
+        sys.modules, "slack_conductor.conductor.inspector", SimpleNamespace(Inspector=Inspector)
+    )
+    monkeypatch.setattr(attachment, "_attach", lambda *a: pytest.fail("took focus"))
+    with pytest.raises(RuntimeError, match="Foreground app unknown"):
+        attachment.attach(object())
+
+
+def test_frontmost_probe_timeout_reads_as_unknown(monkeypatch):
+    module = inspector_module(monkeypatch)
+
+    def stall(args, **kwargs):
+        raise module.subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr(module.subprocess, "run", stall)
+    assert module.Inspector.focused_pid() is None
+
+
+def test_attachment_worker_survives_a_failed_probe(monkeypatch, caplog):
+    probes = []
+
+    def probe():
+        probes.append(1)
+        if len(probes) == 1:
+            raise OSError("fork failed")
+        return "1:app"
+
+    attempts = attachment_attempts(monkeypatch, lambda t: False, probe=probe)
+    assert attempts[0] == 1
+    assert "Conductor attachment check failed" in caplog.text
 
 
 def test_locked_screen_defers_attachment_without_spending_a_retry(monkeypatch, caplog):
