@@ -34,7 +34,9 @@ the old frontend.
 The installer copies an exact source tree so deleted legacy modules are removed.
 The attachment worker reads fresh process identity instead of relying on AppKit's
 run-loop-dependent application cache. Focus restoration uses a fresh foreground PID
-and only restores focus if the bootstrap still owns it. On this Mac, helper shutdown
+and only restores focus if the bootstrap still owns it. It retries with a longer
+timeout on a slow machine, and a bootstrap that cannot read the foreground app
+does not start, because it could not hand focus back. On this Mac, helper shutdown
 or reinstallation can itself foreground Conductor before bootstrap captures focus,
 so restoration is best effort. The accepted startup tradeoff is a brief foreground
 transition; ordinary message dispatch does not interact with the UI. After a failed attachment,
