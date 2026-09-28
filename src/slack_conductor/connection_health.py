@@ -16,10 +16,17 @@ def continuous_time():
 
 class ConnectionHealth:
     def __init__(
-        self, client, stop, *, timeout=120, clock=time.monotonic, suspend_clock=continuous_time
+        self,
+        client,
+        stop,
+        *,
+        timeout=120,
+        patience=60,
+        clock=time.monotonic,
+        suspend_clock=continuous_time,
     ):
         self.client, self.stop = client, stop
-        self.timeout, self.clock = timeout, clock
+        self.timeout, self.patience, self.clock = timeout, patience, clock
         self.suspend_clock = suspend_clock
         self.last_progress = clock()
         self.sleep_offset = suspend_clock() - self.last_progress
@@ -28,6 +35,8 @@ class ConnectionHealth:
         self.stable_since = None
         self.errors = 0
         self.failed = False
+        self.failed_at = None
+        self.escalated = False
         self.lock = threading.Lock()
         self.finished = threading.Event()
         self.worker = threading.Thread(target=self.watch, name="slack-health", daemon=True)
@@ -41,12 +50,29 @@ class ConnectionHealth:
 
     def fail(self, reason):
         self.failed = True
-        log.error("Restarting Slack daemon: %s; transport_errors=%s", reason, self.errors)
-        self.stop.set()
+        self.failed_at = self.clock()
+        log.warning("Slack connection lost: %s; transport_errors=%s", reason, self.errors)
+
+    def stable(self):
+        with self.lock:
+            return self.stable_since is not None and self.clock() - self.stable_since >= 30
+
+    def escalate(self):
+        # The service loop replaces a failed connection in-process. Only a loop that
+        # cannot do so is restarted, because a restart costs the Conductor attachment.
+        with self.lock:
+            if (
+                self.failed
+                and not self.stop.is_set()
+                and self.clock() - self.failed_at >= self.patience
+            ):
+                self.escalated = True
+                log.error("Restarting Slack daemon: connection was not replaced")
+                self.stop.set()
 
     def check(self):
-        # Both the worker and the service loop check health. Either can recover if
-        # the other stalls; serialize their observations and SDK error callbacks.
+        # Both the worker and the service loop check health. Either can observe a
+        # failure if the other stalls; serialize them with the SDK error callbacks.
         with self.lock:
             if self.failed or self.stop.is_set():
                 return
@@ -89,6 +115,7 @@ class ConnectionHealth:
     def watch(self):
         while not self.finished.wait(5) and not self.stop.is_set():
             self.check()
+            self.escalate()
 
     def start(self):
         self.client.on_error_listeners.append(self.on_error)

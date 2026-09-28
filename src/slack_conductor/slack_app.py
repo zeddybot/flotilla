@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 import time
 from contextlib import ExitStack
 
@@ -181,6 +182,64 @@ class Bridge:
             self.store.execute("UPDATE events SET state='failed' WHERE key=?", (key,))
 
 
+class Link:
+    """Socket Mode connection, replaced in-process when it stalls."""
+
+    # In-process replacement once failed for hours until the daemon was restarted,
+    # so an outage this long still ends in a fresh process.
+    OUTAGE_LIMIT = 600
+
+    def __init__(self, app, token, stop):
+        self.app, self.token, self.stop = app, token, stop
+        self.handler = self.health = None
+        self.retry_at, self.delay = 0, 1
+        self.down_since = None
+        self.escalated = False
+
+    def open(self):
+        self.handler = SocketModeHandler(self.app, self.token)
+        self.health = ConnectionHealth(self.handler.client, self.stop)
+        self.health.start()
+        self.handler.connect()
+
+    def close(self):
+        health, handler = self.health, self.handler
+        self.health = self.handler = None
+        if health:
+            health.close()
+            self.escalated = self.escalated or health.escalated
+        if handler:
+            # SDK shutdown joins its own workers; a wedged one must not wedge recovery.
+            closing = threading.Thread(target=handler.close, name="slack-close", daemon=True)
+            closing.start()
+            closing.join(5)
+
+    def connected(self):
+        now = time.monotonic()
+        if not self.health and now >= self.retry_at and not self.stop.is_set():
+            self.retry_at, self.delay = now + self.delay, min(self.delay * 2, 60)
+            try:
+                self.open()
+            except Exception as exc:  # noqa: BLE001 - any failed attempt is retried
+                # Error text can contain authenticated URLs; only log its type here.
+                log.warning("Slack connection attempt failed (%s)", type(exc).__name__)
+                self.close()
+        if self.health:
+            self.health.check()
+            if not self.health.failed:
+                if self.health.stable():
+                    self.delay, self.down_since = 1, None
+                return True
+            self.close()
+        if self.down_since is None:
+            self.down_since = now
+        if now - self.down_since >= self.OUTAGE_LIMIT and not self.stop.is_set():
+            log.error("Restarting Slack daemon: no stable connection for %ss", self.OUTAGE_LIMIT)
+            self.escalated = True
+            self.stop.set()
+        return False
+
+
 def identify(client, owner_id, stop):
     delay = 1
     while True:
@@ -233,30 +292,32 @@ def run(config, store, conductor, creds, stop):
         # Replaying an event reuses its status, workspace intent and native message ID.
         store.execute("UPDATE events SET state='pending' WHERE state='processing'")
         bridge.poller.reconcile()
-        handler = SocketModeHandler(app, creds["SLACK_APP_TOKEN"])
-        resources.callback(handler.close)
-        health = ConnectionHealth(handler.client, stop)
-        health.start()
-        resources.callback(health.close)
-        handler.connect()
-        log.info(
-            "Conductor Slack bridge connected to %s; owner %s",
-            auth["team"],
-            creds["OWNER_SLACK_USER_ID"],
-        )
-        while not stop.is_set():
-            health.check()
+        link = Link(app, creds["SLACK_APP_TOKEN"], stop)
+        resources.callback(link.close)
+        announced = False
+        while True:
+            started = time.monotonic()
+            connected = link.connected()
             if stop.is_set():
                 break
-            started = time.monotonic()
+            if connected and not announced:
+                announced = True
+                log.info(
+                    "Conductor Slack bridge connected to %s; owner %s",
+                    auth["team"],
+                    creds["OWNER_SLACK_USER_ID"],
+                )
             try:
                 online = conductor.ready()
-                envelope = store.next_event() if online else None
-                if envelope:
-                    bridge.process(envelope)
-                bridge.poller.tick()
+                # Replies cannot be delivered while Slack is away; keep events queued.
+                if connected:
+                    envelope = store.next_event() if online else None
+                    if envelope:
+                        bridge.process(envelope)
+                    bridge.poller.tick()
             except Unconfirmed:
                 log.info("Conductor reconnect pending")
             stop.wait(max(0.05, 1 - (time.monotonic() - started)))
-        if health.failed:
+        link.close()
+        if link.escalated:
             raise ConnectionError("Socket Mode stalled; launchd will restart the daemon")
