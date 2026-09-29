@@ -10,8 +10,9 @@ from tests.support import message, result, status
 
 def runtime(epoch, state, tasks=()):
     return {
-        "incarnation": epoch,
-        "live": {"status": state, "backgroundTasks": [{"id": t} for t in tasks]},
+        "instance_id": epoch,
+        "activity": state,
+        "jobs": [{"id": t} for t in tasks],
     }
 
 

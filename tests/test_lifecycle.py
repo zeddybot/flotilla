@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from slack_conductor.conductor.events import normalize
 from slack_conductor.lifecycle import Turn
 from slack_conductor.poller import Poller
 from slack_conductor.store import Store
@@ -183,11 +184,13 @@ def test_foreign_and_nested_events_do_not_change_lifecycle():
         {"conductor_sdk_metadata": {"isForeignResult": True}},
     ):
         assert not turn.consume(
-            {
-                "seq": 1,
-                "role": "assistant",
-                "content": json.dumps({"type": "result", "result": "private", **extra}),
-            }
+            normalize(
+                {
+                    "seq": 1,
+                    "role": "assistant",
+                    "content": json.dumps({"type": "result", "result": "private", **extra}),
+                }
+            )
         )
     assert not turn.content and not turn.result_seq
 
@@ -238,20 +241,22 @@ def test_codex_completion_preserves_final_text_after_restart_and_steer(bridge_st
 def test_explicit_result_wins_and_empty_turn_still_has_fallback():
     turn = Turn(content="Earlier commentary")
     turn.consume(
-        {
-            "role": "assistant",
-            "seq": 1,
-            "content": json.dumps(
-                {
-                    "type": "result",
-                    "result": "Final answer",
-                }
-            ),
-        }
+        normalize(
+            {
+                "role": "assistant",
+                "seq": 1,
+                "content": json.dumps(
+                    {
+                        "type": "result",
+                        "result": "Final answer",
+                    }
+                ),
+            }
+        )
     )
     assert turn.content == "Final answer"
     empty = Turn()
-    empty.consume({"role": "assistant", "seq": 1, "content": '{"type":"result"}'})
+    empty.consume(normalize({"role": "assistant", "seq": 1, "content": '{"type":"result"}'}))
     assert empty.content == "Agent finished without a text reply."
 
 
