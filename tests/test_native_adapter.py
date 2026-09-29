@@ -30,7 +30,9 @@ def fixture(tmp_path):
             "INSERT INTO sessions VALUES (?,?,?,?)", ("foreign", "elsewhere", "fable-5-1", "idle")
         )
     transport = SimpleNamespace(
-        bindings={}, session=lambda _: {"live": {"status": "working"}, "incarnation": "app"}
+        bindings={},
+        session=lambda _: {"live": {"status": "working"}, "incarnation": "app"},
+        journal=Journal(tmp_path / "journal.sqlite"),
     )
     adapter = Conductor.__new__(Conductor)
     adapter.config = Config(
@@ -253,3 +255,81 @@ def test_followup_cannot_reconfigure_session_while_first_prompt_is_in_outbox(tmp
     assert [call["op"] for call in calls] == ["send"]
     assert calls[0]["mode"] == "queue"
     assert "session model remains gpt-6-luna" in note
+
+
+def test_native_controls_keep_command_identity_and_session_target(tmp_path, monkeypatch):
+    adapter, _ = fixture(tmp_path)
+    adapter.db.latest_turn = lambda sid: "turn-1"
+    calls = []
+    adapter.transport.call = lambda body, **options: (
+        calls.append((body, options))
+        or (
+            {"url": "conductor://workspace?id=w&session=s"}
+            if body["op"] == "reveal"
+            else {"ok": True}
+        )
+    )
+    opened = []
+    monkeypatch.setattr(
+        "slack_conductor.conductor.native.subprocess.run",
+        lambda command, **options: opened.append((command, options)),
+    )
+    assert adapter.reveal("w", "s", command_id="open-1") == {
+        "url": "conductor://workspace?id=w&session=s"
+    }
+    assert opened[0][0] == ["/usr/bin/open", "conductor://workspace?id=w&session=s"]
+    assert adapter.interrupt("w", "s", command_id="stop-1") == {"ok": True}
+    assert adapter.respond(
+        "w",
+        "s",
+        "approval-1",
+        {"kind": "approval", "decision": "deny"},
+        command_id="answer-1",
+    ) == {"ok": True}
+    assert adapter.questions("w", "s") == {"ok": True}
+    assert [options["key"] for _, options in calls[:3]] == [
+        "reveal:open-1",
+        "interrupt:stop-1",
+        "respond:answer-1",
+    ]
+    assert calls[3][0] == {"op": "questions", "wid": "w", "sid": "s"}
+    assert calls[3][1]["key"].startswith("questions:")
+    assert calls[1][0] == {"op": "interrupt", "wid": "w", "sid": "s", "turn_id": "turn-1"}
+    assert calls[2][0]["question_id"] == "approval-1"
+    with pytest.raises(RuntimeError, match="does not belong"):
+        adapter.interrupt("w", "foreign", command_id="wrong")
+    assert len(calls) == 4
+
+
+def test_native_response_validation_and_idle_interrupt(tmp_path):
+    adapter, _ = fixture(tmp_path)
+    adapter.db.latest_turn = lambda sid: None
+    adapter.transport.call = lambda *_args, **_kwargs: pytest.fail("no native call expected")
+    assert adapter.interrupt("w", "s", command_id="idle") == {"state": "idle"}
+    for response in [
+        {"kind": "approval", "decision": "allow_edits_for_session"},
+        {"kind": "question", "answers": []},
+        {"kind": "plan", "approved": "yes"},
+        {"kind": "codex_permission", "action": "grant", "scope": "session"},
+        {"kind": "mcp_elicitation", "action": "accept", "content": "bad"},
+    ]:
+        with pytest.raises(ValueError):
+            adapter.respond("w", "s", "q", response, command_id="invalid")
+
+
+def test_interrupt_retry_keeps_original_turn_after_native_turn_changes(tmp_path):
+    adapter, _ = fixture(tmp_path)
+    turn = ["first"]
+    adapter.db.latest_turn = lambda sid: turn[0]
+    calls = []
+
+    def call(body, *, key):
+        adapter.transport.journal.enqueue(key, body)
+        calls.append(body)
+        return {"state": "requested"}
+
+    adapter.transport.call = call
+    adapter.interrupt("w", "s", command_id="stop")
+    turn[0] = "later"
+    adapter.interrupt("w", "s", command_id="stop")
+    assert [body["turn_id"] for body in calls] == ["first", "first"]

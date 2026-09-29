@@ -63,11 +63,18 @@ class ConductorRuntime:
                 "events": True,
                 "files": True,
                 "close_session": True,
-                "interrupt": False,
-                "reveal": False,
-                "respond": False,
+                "interrupt": hasattr(self.native, "interrupt"),
+                "reveal": hasattr(self.native, "reveal"),
+                "respond": hasattr(self.native, "respond"),
             },
             "configuration_policy": "session_start_with_visible_fallback",
+            "response_kinds": [
+                "approval",
+                "question",
+                "plan",
+                "codex_permission",
+                "mcp_elicitation",
+            ],
             "configuration": {
                 "models": list(self.config.models.values()),
                 "effort": True,
@@ -93,7 +100,7 @@ class ConductorRuntime:
     def describe(self, session_id):
         wid = self._workspace(session_id)
         workspace, session = self.native.db.workspace(wid), self.native.db.session(session_id)
-        return {
+        value = {
             "session_id": session_id,
             "workspace_id": wid,
             "adapter": "conductor",
@@ -102,6 +109,14 @@ class ConductorRuntime:
             "path": workspace.get("workspace_path"),
             "configuration": {k: session.get(k) for k in ("model", "thinking_level", "fast_mode")},
         }
+        if hasattr(self.native, "questions") and self.native.ready():
+            try:
+                value["questions"] = self.native.questions(wid, session_id)
+                value["questions_available"] = True
+            except RuntimeError:
+                value["questions"] = []
+                value["questions_available"] = False
+        return value
 
     def create(self, command_id, spec):
         if spec.get("repo") and Path(spec["repo"]).resolve() != self.config.repo.resolve():
@@ -321,15 +336,25 @@ class ConductorRuntime:
         return value
 
     def interrupt(self, command_id, session_id):
-        self._workspace(session_id)
-        raise Unsupported("Conductor interruption is not qualified; stop the agent in Conductor")
+        return self._control("interrupt", command_id, session_id)
 
     def reveal(self, command_id, session_id):
-        self._workspace(session_id)
-        raise Unsupported(
-            "Conductor reveal is not qualified; open the existing session in Conductor"
-        )
+        return self._control("reveal", command_id, session_id)
 
     def respond(self, command_id, session_id, question_id, response):
-        self._workspace(session_id)
-        raise Unsupported("Answer questions and approvals in Conductor")
+        return self._control(
+            "respond", command_id, session_id, question_id=question_id, response=response
+        )
+
+    def _control(self, operation, command_id, session_id, **arguments):
+        wid = self._workspace(session_id)
+        method = getattr(self.native, operation, None)
+        if method is None:
+            raise Unsupported(f"Conductor {operation} is unsupported")
+        saved = self.receipts.begin(command_id, operation, {"session_id": session_id, **arguments})
+        if saved is not None:
+            return saved["value"]
+        result = method(wid, session_id, command_id=command_id, **arguments)
+        value = {"session_id": session_id, **(result or {})}
+        self.receipts.finish(command_id, {"value": value})
+        return value

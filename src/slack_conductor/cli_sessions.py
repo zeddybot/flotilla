@@ -157,4 +157,15 @@ def respond(config, session_id, question_id, response, command_id=None):
     )
     if pending and pending.get("kind") == "plan" and response.get("kind") == "approval":
         response = {"kind": "plan", "approved": response["decision"] == "allow"}
+    elif (
+        pending
+        and pending.get("kind") in {"codex_permission", "mcp_elicitation"}
+        and response.get("kind") == "approval"
+    ):
+        if response["decision"] == "allow":
+            raise CLIError(
+                "This request needs explicit response fields; inspect the request and use --response-file",
+                "usage_error",
+            )
+        response = {"kind": pending["kind"], "action": "decline"}
     return runtime.respond(command_id or _id(), session_id, question_id, response)

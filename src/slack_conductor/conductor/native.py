@@ -3,6 +3,7 @@
 import json
 import logging
 import sqlite3
+import subprocess
 import time
 import uuid
 from dataclasses import dataclass
@@ -246,3 +247,90 @@ class Conductor:
             self.transport.call({"op": "archive", "wid": wid, "sid": sid}, key="archive:" + wid)
         self.transport.bindings.pop(sid, None)
         return ""
+
+    def reveal(self, wid, sid, *, command_id=None):
+        self.validate(wid, sid)
+        result = self.transport.call(
+            {"op": "reveal", "wid": wid, "sid": sid},
+            key="reveal:" + (command_id or str(uuid.uuid4())),
+        )
+        subprocess.run(["/usr/bin/open", result["url"]], check=True, timeout=5)
+        return result
+
+    def questions(self, wid, sid):
+        self.validate(wid, sid)
+        return self.transport.call(
+            {"op": "questions", "wid": wid, "sid": sid},
+            key="questions:" + str(uuid.uuid4()),
+            timeout=5,
+        )
+
+    def interrupt(self, wid, sid, *, command_id=None):
+        self.validate(wid, sid)
+        key = "interrupt:" + (command_id or str(uuid.uuid4()))
+        previous = self.transport.journal.command(key) if command_id else None
+        if previous and (previous.get("wid"), previous.get("sid")) != (wid, sid):
+            raise ValueError("Command identity reused with different target")
+        turn_id = previous["turn_id"] if previous else self.db.latest_turn(sid)
+        if not turn_id:
+            return {"state": "idle"}
+        return self.transport.call(
+            {"op": "interrupt", "wid": wid, "sid": sid, "turn_id": turn_id},
+            key=key,
+        )
+
+    def respond(self, wid, sid, question_id, response, *, command_id=None):
+        self.validate(wid, sid)
+        if not isinstance(question_id, str) or not question_id:
+            raise ValueError("question_id is required")
+        if not isinstance(response, dict):
+            raise TypeError("response must be an object")
+        kind = response.get("kind")
+        if kind == "approval":
+            if response.get("decision") not in {"allow", "deny"}:
+                raise ValueError("approval decision must be allow or deny")
+        elif kind == "question":
+            answers = response.get("answers")
+            if (
+                not isinstance(answers, list)
+                or not answers
+                or not all(
+                    isinstance(answer, str)
+                    or (isinstance(answer, list) and all(isinstance(item, str) for item in answer))
+                    for answer in answers
+                )
+            ):
+                raise ValueError("question answers must be strings or string lists")
+        elif kind == "plan":
+            if type(response.get("approved")) is not bool:
+                raise ValueError("plan approved must be boolean")
+            if "feedback" in response and not isinstance(response["feedback"], str):
+                raise ValueError("plan feedback must be a string")
+        elif kind == "codex_permission":
+            action = response.get("action")
+            if action == "grant":
+                if response.get("scope") not in {"turn", "session"} or not isinstance(
+                    response.get("granted_permissions"), dict
+                ):
+                    raise ValueError("Codex grant requires scope and granted_permissions")
+            elif action != "decline":
+                raise ValueError("Codex permission action must be grant or decline")
+        elif kind == "mcp_elicitation":
+            action = response.get("action")
+            if action == "accept":
+                if "content" in response and not isinstance(response["content"], dict):
+                    raise ValueError("MCP elicitation content must be an object")
+            elif action != "decline":
+                raise ValueError("MCP elicitation action must be accept or decline")
+        else:
+            raise ValueError("unknown Conductor response kind")
+        return self.transport.call(
+            {
+                "op": "respond",
+                "wid": wid,
+                "sid": sid,
+                "question_id": question_id,
+                "response": response,
+            },
+            key="respond:" + (command_id or str(uuid.uuid4())),
+        )
