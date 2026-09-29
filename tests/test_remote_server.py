@@ -8,7 +8,7 @@ from websockets.exceptions import InvalidStatus
 from websockets.sync.client import connect
 
 from slack_conductor.config import Config
-from slack_conductor.remote import RemoteConductor
+from slack_conductor.remote import VERSION, RemoteConductor
 
 TOKEN = "secret-token-with-at-least-thirty-two-chars"
 
@@ -39,8 +39,8 @@ def test_handshake_rejects_wrong_auth_client_and_protocol(server):
         connect(url, additional_headers=headers("other"))
     assert wrong_client.value.response.status_code == 403
     with connect(url, additional_headers=headers()) as peer:
-        assert json.loads(peer.recv())["version"] == 1
-        peer.send(json.dumps({"version": 2, "type": "ready", "ready": True}))
+        assert json.loads(peer.recv())["version"] == VERSION
+        peer.send(json.dumps({"version": 999, "type": "ready", "ready": True}))
         with pytest.raises(Exception, match="Unsupported protocol"):
             peer.recv()
     assert not remote.ready()
@@ -50,13 +50,13 @@ def test_duplicate_client_is_fenced_without_eviction(server):
     remote, url = server
     with connect(url, additional_headers=headers()) as first:
         assert json.loads(first.recv())["bindings"] == {"s1": "w1"}
-        first.send(json.dumps({"version": 1, "type": "ready", "ready": True}))
+        first.send(json.dumps({"version": VERSION, "type": "ready", "ready": True}))
         with (
             connect(url, additional_headers=headers()) as second,
             pytest.raises(Exception, match="Client already connected"),
         ):
             second.recv()
-        first.send(json.dumps({"version": 1, "type": "ready", "ready": True}))
+        first.send(json.dumps({"version": VERSION, "type": "ready", "ready": True}))
         deadline = time.monotonic() + 2
         while not remote.ready() and time.monotonic() < deadline:
             time.sleep(0.01)

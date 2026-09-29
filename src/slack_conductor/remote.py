@@ -1,4 +1,4 @@
-"""Single-owner remote Conductor facade; Slack and its delivery state stay here."""
+"""Versioned session-runtime transport; Slack and delivery state stay on the server."""
 
 import hashlib
 import json
@@ -14,9 +14,11 @@ from websockets.sync.server import serve
 
 from .conductor.journal import Unconfirmed
 from .remote_journal import Receipts
+from .runtime import MUTATIONS, RUNTIME_VERSION
+from .runtime_observations import RuntimeObservations
 
 log = logging.getLogger(__name__)
-VERSION = 1
+VERSION = 2
 MAX_MESSAGE = 64 * 1024 * 1024
 
 
@@ -33,48 +35,13 @@ def unpack(response):
     return response.get("value")
 
 
-class RemoteObservations:
-    METHODS = frozenset(
-        {
-            "workspace",
-            "session",
-            "cursor",
-            "messages",
-            "pickup",
-            "pending",
-            "has_later_turn",
-            "latest_turn",
-        }
-    )
-
-    def __init__(self, remote):
-        self.remote = remote
-
-    def online(self):
-        return self.remote.ready()
-
-    def __getattr__(self, name):
-        if name not in self.METHODS:
-            raise AttributeError(name)
-
-        def observe(*args):
-            try:
-                return self.remote.rpc("db." + name, {"args": args})
-            except Unconfirmed:
-                if name == "session":
-                    return {"status": "reconnecting"}
-                raise
-
-        return observe
-
-
 class RemoteConductor:
     allow_offline = True
 
     def __init__(self, config, token):
         self.config, self.token = config, token
         self.receipts = Receipts(config.state_dir / "remote.sqlite")
-        self.db = RemoteObservations(self)
+        self.db = RuntimeObservations(self)
         self.lock = threading.RLock()
         self.serial = threading.Lock()
         self.peer = None
@@ -118,7 +85,15 @@ class RemoteConductor:
             self.peer = peer
             self.native_ready = False
         try:
-            peer.send(json.dumps({"version": VERSION, "bindings": self.bindings}))
+            peer.send(
+                json.dumps(
+                    {
+                        "version": VERSION,
+                        "runtime_version": RUNTIME_VERSION,
+                        "bindings": self.bindings,
+                    }
+                )
+            )
             for raw in peer:
                 message = json.loads(raw)
                 if not isinstance(message, dict) or message.get("version") != VERSION:
@@ -153,7 +128,7 @@ class RemoteConductor:
 
     def rpc(self, method, args, key=None, timeout=40):
         # One caller controls a session at a time, matching the local service loop.
-        durable = method in {"native.new_workspace", "native.send", "native.archive"}
+        durable = method.removeprefix("runtime.") in MUTATIONS
         with self.serial:
             if key and durable:
                 saved = self.receipts.begin(key, method, args)
@@ -192,20 +167,46 @@ class RemoteConductor:
                 with self.lock:
                     self.pending.pop(request_id, None)
 
-    def validate(self, wid, sid=None):
-        return self.rpc("native.validate", {"wid": wid, "sid": sid})
+    def probe(self):
+        return self.rpc("runtime.probe", {})
 
-    def new_workspace(self, key=None):
+    def validate(self, wid, sid=None):
+        value = self.rpc("runtime.recover", {"workspace_id": wid, "session_id": sid})
+        self.bindings[value["session_id"]] = value["workspace_id"]
+        return {"id": value["workspace_id"], "active_session_id": value["session_id"]}
+
+    def new_workspace(self, key=None, spec=None):
         key = key or str(uuid.uuid4())
-        return self.rpc("native.new_workspace", {"key": key}, key="create:" + key)
+        command = "runtime:create:" + key
+        value = self.rpc("runtime.create", {"command_id": key, "spec": spec or {}}, key=command)
+        self.bindings[value["session_id"]] = value["workspace_id"]
+        return {"id": value["workspace_id"], "active_session_id": value["session_id"]}
+
+    def create_session(self, key, spec):
+        return self.new_workspace(key, spec)
 
     def send(self, wid, sid, prompt, options):
-        args = {"wid": wid, "sid": sid, "prompt": prompt, "options": options}
         self.bindings[sid] = wid
-        return self.rpc("native.send", args, key="send:" + command_key("send", args))
+        message_id = str(uuid.uuid5(uuid.NAMESPACE_URL, sid + ":" + prompt))
+        command = "runtime:submit:" + message_id
+        value = self.rpc(
+            "runtime.submit",
+            {
+                "command_id": command,
+                "session_id": sid,
+                "message_id": message_id,
+                "run_id": "run:" + message_id,
+                "prompt": prompt,
+                "options": options,
+            },
+            key=command,
+        )
+        return value.get("warning", "")
 
     def archive(self, wid, sid):
-        return self.rpc("native.archive", {"wid": wid, "sid": sid}, key="archive:" + wid)
+        command = "runtime:close:" + wid
+        self.rpc("runtime.close_session", {"command_id": command, "session_id": sid}, key=command)
+        return ""
 
     def make_uploads(self, store, slack, clock):
         from .remote_assets import RemoteUploads
@@ -226,3 +227,7 @@ def run_client(config, token, stop):
     from .remote_client import run_client as run
 
     return run(config, token, stop)
+
+
+# Kept for installed entrypoints while callers adopt the runtime name.
+RemoteRuntime = RemoteConductor

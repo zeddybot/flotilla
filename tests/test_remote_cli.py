@@ -10,7 +10,7 @@ from websockets.sync.client import connect
 
 from slack_conductor.__main__ import main
 from slack_conductor.config import Config
-from slack_conductor.remote import RemoteConductor
+from slack_conductor.remote import VERSION, RemoteConductor
 
 TOKEN = "secret-token-with-at-least-thirty-two-chars"
 
@@ -58,7 +58,7 @@ def test_server_doctor_checks_authenticated_health_without_native_adapter(
             url, additional_headers={"Authorization": "Bearer " + TOKEN, "X-Client-ID": "mac"}
         ) as client:
             client.recv()
-            client.send(json.dumps({"version": 1, "type": "ready", "ready": True}))
+            client.send(json.dumps({"version": VERSION, "type": "ready", "ready": True}))
             deadline = time.monotonic() + 2
             while not remote.ready() and time.monotonic() < deadline:
                 time.sleep(0.01)

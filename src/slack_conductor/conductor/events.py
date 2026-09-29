@@ -59,6 +59,10 @@ def normalize(row):
                             )
                         parts.append(part)
                 event.update(kind="update", parts=parts)
+    if event.get("nested") or event.get("foreign"):
+        # Keep lifecycle boundaries without transporting unrelated agent output.
+        for key in ("text", "parts", "description"):
+            event.pop(key, None)
     return {
         "id": row.get("id", str(row.get("seq", ""))),
         "seq": row.get("seq", 0),

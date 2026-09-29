@@ -83,8 +83,11 @@ class NativeDB(ConductorDB):
 
 
 class Conductor:
+    client_mode = False
+
     def __init__(self, config, *, client=False):
         self.config = config
+        self.client_mode = client
         self.transport = (
             Client(config.state_dir)
             if client
@@ -113,6 +116,8 @@ class Conductor:
     def ready(self):
         if not self.transport.online():
             return False
+        if self.client_mode:
+            return True
         generation = self.transport.attachment["generation"]
         self.transport.journal.reconnect(generation, self.db)
         if generation != self.generation:

@@ -120,6 +120,35 @@ class ConductorRuntime:
         self.receipts.bind({sid: workspace_id})
         return {"workspace_id": workspace_id, "session_id": sid}
 
+    def _pickup(self, sid, prompt, message_id=None):
+        if message_id and hasattr(self.native.db, "pickup_message"):
+            return self.native.db.pickup_message(sid, message_id)
+        return self.native.db.pickup(sid, prompt)
+
+    def _correlations(self, sid):
+        with self.receipts.connect() as c:
+            pending = list(
+                c.execute(
+                    "SELECT id,prompt FROM messages WHERE session_id=? AND segment_id IS NULL",
+                    (sid,),
+                )
+            )
+        for mid, prompt in pending:
+            picked = self._pickup(sid, prompt, mid)
+            if picked:
+                with self.receipts.connect() as c:
+                    c.execute(
+                        "UPDATE messages SET segment_id=? WHERE id=?", (picked["turn_id"], mid)
+                    )
+        with self.receipts.connect() as c:
+            return {
+                r[0]: (r[1], r[2])
+                for r in c.execute(
+                    "SELECT segment_id,id,run_id FROM messages WHERE session_id=? AND segment_id IS NOT NULL ORDER BY rowid",
+                    (sid,),
+                )
+            }
+
     def submit(self, command_id, session_id, message_id, run_id, prompt, options):
         wid = self._workspace(session_id)
         args = {
@@ -158,7 +187,24 @@ class ConductorRuntime:
             "send_mode": mode,
         }
         warning = self.native.send(wid, session_id, prompt, settings, message_id=message_id)
-        picked = self.native.db.pickup(session_id, prompt)
+        changed = [
+            key
+            for key in ("model", "effort", "fast")
+            if key in spec and key in options and spec[key] != options[key]
+        ]
+        if changed:
+            warning = " ".join(
+                filter(
+                    None,
+                    [
+                        warning,
+                        "Session configuration is fixed; use [new] to change "
+                        + ", ".join(changed)
+                        + ".",
+                    ],
+                )
+            )
+        picked = self._pickup(session_id, prompt, message_id)
         if picked:
             with self.receipts.connect() as c:
                 prior = c.execute(
@@ -185,6 +231,17 @@ class ConductorRuntime:
         wid = self._workspace(session_id)
         if not isinstance(after, int) or after < 0:
             raise ValueError("after must be a nonnegative event cursor")
+        if view not in {
+            "all",
+            "snapshot",
+            "events",
+            "workspace",
+            "cursor",
+            "receipt",
+            "later_input",
+            "latest_segment",
+        }:
+            raise ValueError("Unknown observation view")
         db = self.native.db
         # Views bound individual observations; full replay remains the default.
         snapshot = db.session(session_id) if view in {"all", "snapshot"} else None
@@ -195,14 +252,7 @@ class ConductorRuntime:
         )
         if snapshot is not None:
             snapshot = {k: snapshot[k] for k in ("id", "status", "runtime") if k in snapshot}
-        with self.receipts.connect() as c:
-            correlations = {
-                r[0]: (r[1], r[2])
-                for r in c.execute(
-                    "SELECT segment_id,id,run_id FROM messages WHERE session_id=? AND segment_id IS NOT NULL",
-                    (session_id,),
-                )
-            }
+        correlations = self._correlations(session_id)
         for event in events:
             message_id, run_id = correlations.get(event["turn_id"], (None, None))
             event.update(message_id=message_id, run_id=run_id)
@@ -243,8 +293,13 @@ class ConductorRuntime:
 
     def close_session(self, command_id, session_id):
         wid = self._workspace(session_id)
+        saved = self.receipts.begin(command_id, "close_session", {"session_id": session_id})
+        if saved is not None:
+            return saved["value"]
         self.native.archive(wid, session_id)
-        return {"session_id": session_id, "state": "archived"}
+        value = {"session_id": session_id, "state": "archived"}
+        self.receipts.finish(command_id, {"value": value})
+        return value
 
     def interrupt(self, command_id, session_id):
         self._workspace(session_id)

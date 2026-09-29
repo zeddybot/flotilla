@@ -11,11 +11,11 @@ from websockets.exceptions import WebSocketException
 from websockets.sync.client import connect
 
 from .conductor.journal import Unconfirmed
-from .remote import MAX_MESSAGE, VERSION, RemoteObservations
+from .remote import MAX_MESSAGE, VERSION
 from .remote_journal import Receipts
+from .runtime import MUTATIONS, RUNTIME_VERSION, dispatch
 
 log = logging.getLogger(__name__)
-OPERATIONS = {"native.validate", "native.new_workspace", "native.send", "native.archive"}
 
 
 def write_status(state_dir, **values):
@@ -27,16 +27,17 @@ def write_status(state_dir, **values):
 
 
 class Dispatcher:
-    def __init__(self, config, conductor):
-        from .remote_assets import AssetSource
+    def __init__(self, config, conductor, runtime=None):
+        if runtime is None:
+            from .conductor.session_runtime import ConductorRuntime
 
-        self.conductor = conductor
+            runtime = ConductorRuntime(config, conductor)
+        self.runtime = runtime
         self.receipts = Receipts(config.state_dir / "remote.sqlite")
-        self.assets = AssetSource(config.state_dir, conductor)
 
     def execute(self, message):
         method, args, key = message["method"], message["args"], message.get("key")
-        durable = method in {"native.new_workspace", "native.send", "native.archive"}
+        durable = method.removeprefix("runtime.") in MUTATIONS
         if durable and not isinstance(key, str):
             return {"error": "Mutations require a durable command identity"}
         if key and durable:
@@ -45,22 +46,14 @@ class Dispatcher:
                 return saved
         try:
             if method.startswith("files."):
-                value = self.assets.call(method, args)
-            elif method in OPERATIONS:
-                if not self.conductor.ready():
-                    raise Unconfirmed("Conductor is reconnecting")
-                value = getattr(self.conductor, method.split(".")[1])(**args)
-                if method == "native.new_workspace":
-                    self.receipts.bind({value["active_session_id"]: value["id"]})
-                if args.get("sid"):
-                    self.receipts.bind({args["sid"]: args["wid"]})
-            elif method.startswith("db.") and method[3:] in RemoteObservations.METHODS:
-                parameters = args["args"]
-                bindings = self.receipts.bindings()
-                owned = bindings.values() if method == "db.workspace" else bindings
-                if not parameters or parameters[0] not in owned:
-                    raise ValueError("Observation target is not a bound session")
-                value = getattr(self.conductor.db, method[3:])(*parameters)
+                value = self.runtime.files(method, args)
+            elif method.startswith("runtime."):
+                if not self.runtime.ready():
+                    raise Unconfirmed("Session runtime is reconnecting")
+                value = dispatch(self.runtime, method.removeprefix("runtime."), args)
+                if method in {"runtime.create", "runtime.recover"}:
+                    self.receipts.bind({value["session_id"]: value["workspace_id"]})
+                    self.runtime.bind({value["session_id"]: value["workspace_id"]})
 
             else:
                 raise ValueError("Unknown remote operation")
@@ -80,13 +73,14 @@ class Dispatcher:
         return response
 
 
-def run_client(config, token, stop, *, conductor=None):
-    if conductor is None:
+def run_client(config, token, stop, *, conductor=None, runtime=None):
+    if conductor is None and runtime is None:
         from .conductor.native import Conductor
 
         conductor = Conductor(config)
-    dispatcher = Dispatcher(config, conductor)
-    conductor.start(dispatcher.receipts.bindings())
+    dispatcher = Dispatcher(config, conductor, runtime)
+    runtime = dispatcher.runtime
+    runtime.start(dispatcher.receipts.bindings())
     delay = 1
     try:
         while not stop.is_set():
@@ -107,15 +101,18 @@ def run_client(config, token, stop, *, conductor=None):
                     ping_timeout=20,
                 ) as peer:
                     hello = json.loads(peer.recv(timeout=10))
-                    if hello.get("version") != VERSION:
+                    if (
+                        hello.get("version") != VERSION
+                        or hello.get("runtime_version") != RUNTIME_VERSION
+                    ):
                         raise ValueError("Server protocol is incompatible")
                     dispatcher.receipts.bind(hello["bindings"])
-                    conductor.transport.bindings.update(hello["bindings"])
+                    runtime.bind(hello["bindings"])
 
                     def pulse(peer=peer, heartbeat_stop=heartbeat_stop):
                         while not heartbeat_stop.is_set():
                             try:
-                                ready = conductor.transport.online()
+                                ready = runtime.ready()
                                 peer.send(
                                     json.dumps(
                                         {"version": VERSION, "type": "ready", "ready": ready}
@@ -138,7 +135,7 @@ def run_client(config, token, stop, *, conductor=None):
                     heartbeat.start()
                     delay = 1
                     while not stop.is_set():
-                        conductor.ready()
+                        runtime.ready()
                         try:
                             raw = peer.recv(timeout=1)
                         except TimeoutError:
@@ -171,4 +168,4 @@ def run_client(config, token, stop, *, conductor=None):
                 break
             delay = min(delay * 2, 30)
     finally:
-        conductor.close()
+        runtime.shutdown()
