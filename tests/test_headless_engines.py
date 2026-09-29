@@ -11,7 +11,7 @@ def test_explicit_session_resume_and_permissions_are_preserved():
         assert "known-session" in argv and "chosen" in argv
         assert "--last" not in argv
         assert not any("bypass" in arg or "skip-permissions" in arg for arg in argv)
-    assert "dontAsk" in command(config, "claude", "sid", "prompt")
+    assert "acceptEdits" in command(config, "claude", "sid", "prompt")
     assert 'approval_policy="never"' in command(config, "codex", "sid", "prompt")
 
 

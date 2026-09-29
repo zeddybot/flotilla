@@ -21,7 +21,7 @@ def command(config, engine, native_id, prompt, *, first=False, spec=None):
             "stream-json",
             "--verbose",
             "--permission-mode",
-            "plan" if policy == "read-only" else "dontAsk",
+            "plan" if policy == "read-only" else "acceptEdits",
         ]
         args += (
             (["--session-id", native_id] if first else ["--resume", native_id]) if native_id else []
