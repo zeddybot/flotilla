@@ -21,6 +21,33 @@ def enforce_shutdown(stop, *, timeout=30, exit_process=os._exit):
 
 
 def daemon(root, config, conductor):
+    lock, stop = _start(config)
+    try:
+        run(config, Store(config.state_dir / "bridge.sqlite"), conductor, credentials(root), stop)
+    except Exception:
+        logging.getLogger(__name__).exception("Daemon stopped")
+        raise
+    finally:
+        stop.set()
+        lock.close()
+
+
+def client(root, config, token):
+    """Run the remote Mac executor under the same lock as the local daemon."""
+    from .remote import run_client
+
+    lock, stop = _start(config)
+    try:
+        run_client(config, token, stop)
+    except Exception:
+        logging.getLogger(__name__).exception("Client stopped")
+        raise
+    finally:
+        stop.set()
+        lock.close()
+
+
+def _start(config):
     os.umask(0o077)
     lock = (config.state_dir / "daemon.lock").open("a")
     try:
@@ -38,11 +65,4 @@ def daemon(root, config, conductor):
     threading.Thread(
         target=enforce_shutdown, args=(stop,), name="shutdown-deadline", daemon=True
     ).start()
-    try:
-        run(config, Store(config.state_dir / "bridge.sqlite"), conductor, credentials(root), stop)
-    except Exception:
-        logging.getLogger(__name__).exception("Daemon stopped")
-        raise
-    finally:
-        stop.set()
-        lock.close()
+    return lock, stop
