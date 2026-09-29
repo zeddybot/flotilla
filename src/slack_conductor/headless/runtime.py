@@ -1,9 +1,11 @@
 """Durable headless runtime with one isolated worktree and process per session."""
 
 import json
+import shutil
 import subprocess
 import threading
 import uuid
+from functools import wraps
 from pathlib import Path
 
 from ..remote_files import AssetSource
@@ -11,8 +13,18 @@ from ..runtime import RUNTIME_VERSION, Unsupported
 from ..runtime_log import EventLog
 from .execution import Execution
 from .observations import observe as observe_view
+from .permissions import within_policy
 from .process_host import terminate
 from .store import Store
+
+
+def serialized(method):
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return call
 
 
 class HeadlessRuntime(Execution):
@@ -102,7 +114,7 @@ class HeadlessRuntime(Execution):
             "configuration_policy": "session_start_fixed",
             "configuration": {
                 "engines": ["claude", "codex"],
-                "permission_policy": ["read-only", "workspace-write"],
+                "permission_policy": ["read-only", "workspace-write", "external-sandbox"],
             },
         }
 
@@ -131,6 +143,7 @@ class HeadlessRuntime(Execution):
             "configuration": {"requested": requested, "effective": effective},
         }
 
+    @serialized
     def create(self, command_id, spec):
         prior = self.store.command(command_id, "create", spec)
         if prior is not None:
@@ -141,14 +154,10 @@ class HeadlessRuntime(Execution):
         engine = spec.get("engine") or self.config.engine
         if engine not in {"claude", "codex"}:
             raise Unsupported("Headless engine must be claude or codex")
-        if getattr(self.config, "engine_permission_policy", None) not in {
-            "read-only",
-            "workspace-write",
-        }:
-            raise ValueError("Headless permission policy must be explicit")
+        if not shutil.which(str(getattr(self.config, engine + "_binary"))):
+            raise ValueError(f"The configured {engine} executable is unavailable")
         policy = spec.get("permission_policy") or self.config.engine_permission_policy
-        if policy not in {"read-only", "workspace-write"}:
-            raise ValueError("Unsupported headless permission policy")
+        within_policy(policy, self.config.engine_permission_policy)
         if spec.get("fast"):
             raise Unsupported("Headless fast mode is unsupported")
         effective = {
@@ -185,6 +194,7 @@ class HeadlessRuntime(Execution):
             raise RuntimeError("Headless workspace is missing")
         return {"workspace_id": workspace_id, "session_id": row["id"], "workspace": workspace}
 
+    @serialized
     def submit(self, command_id, session_id, message_id, run_id, prompt, options):
         row = self._session(session_id)
         if row["state"] != "active":
@@ -241,6 +251,7 @@ class HeadlessRuntime(Execution):
     def observe(self, session_id, after=0, prompt=None, segment_id=None, view="all", limit=200):
         return observe_view(self, session_id, after, prompt, segment_id, view, limit)
 
+    @serialized
     def close_session(self, command_id, session_id):
         self._session(session_id)
         arguments = {"session_id": session_id}
@@ -264,6 +275,7 @@ class HeadlessRuntime(Execution):
                 terminate(process)
         return value
 
+    @serialized
     def interrupt(self, command_id, session_id):
         self._session(session_id)
         arguments = {"session_id": session_id}

@@ -49,3 +49,23 @@ Use `--engine codex` for a new Codex session. `--model` selects a model for that
 ## Preserve state
 
 Keep the worker sandbox persistent across stop/start and store SQLite on its local filesystem. With the worker held and the client stopped, back up `/data/state/headless.sqlite`, `/data/state/headless-events.sqlite`, `/data/state/remote.sqlite`, `/data/state/remote_assets/`, the worktrees, and the engine's native session and authentication state in the worker user's home. Preserve `/data/config/config.toml` and `client.token` securely as separate secrets. Restore these pieces together so command receipts, event cursors, native IDs, and workspaces still agree. The server has separate Slack delivery and binding state that needs its own backup; the existing server migration archive does not cover the worker's new databases or native engine history. Daytona documents sandbox filesystem [persistence](https://www.daytona.io/docs/en/persistence/), but a stopped container does not preserve running processes.
+
+## Daytona sandbox compatibility
+
+The live pilot found that Daytona's default container blocks the nested namespace
+operations Codex uses for its Linux sandbox (`bwrap` failed while setting up
+loopback or UID mappings). Installing bubblewrap alone did not resolve this.
+Restricted Codex text/resume works, but file-tool execution needs a compatible
+inner sandbox or an explicitly selected outer execution boundary.
+
+`engine_permission_policy = "external-sandbox"` is an opt-in for an isolated
+Linux worker marked `FLOTILLA_ISOLATED_WORKER=1`. It uses the worker container as
+the execution boundary: Codex receives `--sandbox danger-full-access`, and
+Claude receives `--permission-mode bypassPermissions`. This allows tools to act
+throughout that container, including its available credentials and network. It
+is never an automatic fallback and cannot be requested above the worker's
+configured policy. Do not enable it on a shared host or connect it to the Mac's
+state. The default remains `read-only`; `workspace-write` keeps inner controls.
+
+Claude's `workspace-write` mode uses `acceptEdits`, which passed a real file-edit
+check. Other tool approvals can still be denied in noninteractive execution.
