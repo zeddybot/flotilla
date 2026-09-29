@@ -34,13 +34,13 @@ class ConductorDB:
             "SELECT coalesce(max(rowid),0) AS n FROM session_messages WHERE session_id=?", (sid,)
         )["n"]
 
-    def messages(self, sid, after):
+    def messages(self, sid, after, limit=None):
         # Timestamps can collide. rowid gives insertion order; unsent queue rows
         # are matched independently because Conductor can update them in place.
         rows = self.query(
             "SELECT rowid AS seq,* FROM session_messages "
-            "WHERE session_id=? AND rowid>? ORDER BY rowid",
-            (sid, after),
+            "WHERE session_id=? AND rowid>? ORDER BY rowid" + (" LIMIT ?" if limit else ""),
+            (sid, after, limit) if limit else (sid, after),
         )
         for row in rows:
             if row.get("role") != "assistant":

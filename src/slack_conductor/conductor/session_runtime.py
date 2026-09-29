@@ -7,7 +7,7 @@ from pathlib import Path
 
 from ..remote_journal import Receipts
 from ..runtime import RUNTIME_VERSION, Unsupported
-from .events import normalize
+from .observations import Observations
 
 
 class ConductorRuntime:
@@ -21,6 +21,10 @@ class ConductorRuntime:
             c.execute(
                 "CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, run_id TEXT NOT NULL, prompt TEXT NOT NULL, segment_id TEXT)"
             )
+            c.execute(
+                "CREATE TABLE IF NOT EXISTS message_modes (id TEXT PRIMARY KEY, mode TEXT NOT NULL, requested_run TEXT NOT NULL)"
+            )
+        self.observations = Observations(self)
         # Import existing bindings without rewriting server-owned thread identities.
         remote = config.state_dir / "remote.sqlite"
         if remote.exists():
@@ -137,9 +141,16 @@ class ConductorRuntime:
             picked = self._pickup(sid, prompt, mid)
             if picked:
                 with self.receipts.connect() as c:
+                    mode = c.execute("SELECT mode FROM message_modes WHERE id=?", (mid,)).fetchone()
+                    prior = c.execute(
+                        "SELECT run_id FROM messages WHERE session_id=? AND segment_id=? ORDER BY rowid LIMIT 1",
+                        (sid, picked["turn_id"]),
+                    ).fetchone()
                     c.execute(
                         "UPDATE messages SET segment_id=? WHERE id=?", (picked["turn_id"], mid)
                     )
+                    if prior and mode and mode[0] == "steer":
+                        c.execute("UPDATE messages SET run_id=? WHERE id=?", (prior[0], mid))
         with self.receipts.connect() as c:
             return {
                 r[0]: (r[1], r[2])
@@ -170,13 +181,18 @@ class ConductorRuntime:
             ).fetchone()
             spec = json.loads(row[0]) if row else {}
             existing = c.execute(
-                "SELECT session_id,run_id,prompt FROM messages WHERE id=?", (message_id,)
+                "SELECT m.session_id,coalesce(d.requested_run,m.run_id),m.prompt FROM messages m "
+                "LEFT JOIN message_modes d ON d.id=m.id WHERE m.id=?",
+                (message_id,),
             ).fetchone()
             if existing and existing != (session_id, run_id, prompt):
                 raise ValueError("Message identity reused with different arguments")
             c.execute(
                 "INSERT OR IGNORE INTO messages VALUES (?,?,?,?,NULL)",
                 (message_id, session_id, run_id, prompt),
+            )
+            c.execute(
+                "INSERT OR IGNORE INTO message_modes VALUES (?,?,?)", (message_id, mode, run_id)
             )
         settings = {
             "model": self.config.model,
@@ -227,7 +243,7 @@ class ConductorRuntime:
         self.receipts.finish(command_id, {"value": value})
         return value
 
-    def observe(self, session_id, after=0, prompt=None, segment_id=None, view="all"):
+    def observe(self, session_id, after=0, prompt=None, segment_id=None, view="all", limit=200):
         wid = self._workspace(session_id)
         if not isinstance(after, int) or after < 0:
             raise ValueError("after must be a nonnegative event cursor")
@@ -244,18 +260,15 @@ class ConductorRuntime:
             raise ValueError("Unknown observation view")
         db = self.native.db
         # Views bound individual observations; full replay remains the default.
-        snapshot = db.session(session_id) if view in {"all", "snapshot"} else None
-        events = (
-            [normalize(row) for row in db.messages(session_id, after)]
+        if view in {"all", "snapshot", "events"}:
+            self.observations.ingest(session_id)
+        snapshot = self.observations.snapshot(session_id) if view in {"all", "snapshot"} else None
+        page = (
+            self.observations.log.page(session_id, after, limit)
             if view in {"all", "events"}
-            else []
+            else {}
         )
-        if snapshot is not None:
-            snapshot = {k: snapshot[k] for k in ("id", "status", "runtime") if k in snapshot}
-        correlations = self._correlations(session_id)
-        for event in events:
-            message_id, run_id = correlations.get(event["turn_id"], (None, None))
-            event.update(message_id=message_id, run_id=run_id)
+        events = page.get("events", [])
         picked = db.pickup(session_id, prompt) if prompt is not None else None
         receipt = (
             None
@@ -276,6 +289,12 @@ class ConductorRuntime:
             "observed_at": time.time(),
             "snapshot": snapshot,
             "events": events,
+            "has_more": page.get("has_more", False)
+            or (
+                view in {"all", "events"}
+                and self.observations.log.cursor(session_id) < db.cursor(session_id)
+            ),
+            "retained_after": page.get("retained_after", 0),
             "workspace": {
                 k: v for k, v in db.workspace(wid).items() if k in {"id", "state", "workspace_path"}
             }
