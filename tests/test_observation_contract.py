@@ -73,3 +73,34 @@ def test_final_reply_survives_poller_restart_without_native_sql(tmp_path):
     delivered = len(slack.edits)
     Poller(Store(store.path), observations, slack, clock=lambda: 106).tick()
     assert len(slack.edits) == delivered
+
+
+@pytest.mark.parametrize("reason", ["unread_events", "unconfirmed_rest", "stale"])
+def test_result_cannot_complete_before_replay_and_fresh_rest(tmp_path, reason):
+    store, slack = Store(tmp_path / "bridge.sqlite"), Slack()
+    request = status(store, "message", "hello")
+    event = {
+        "seq": 2,
+        "id": "result",
+        "role": "assistant",
+        "turn_id": "turn",
+        "event": {"kind": "result", "text": "candidate", "error": False},
+    }
+    observations = SessionObservations("idle", [event])
+    observations.session = lambda _: {
+        "status": "idle",
+        "freshness": "stale" if reason == "stale" else "fresh",
+        "rest": {"confirmed": reason != "unconfirmed_rest"},
+    }
+    observations.replay_pending = lambda _: reason == "unread_events"
+    poller = Poller(store, observations, slack, clock=lambda: 100, settle_seconds=0)
+    poller.tick()
+    assert store.status(request)["state"] != "complete"
+    observations.session = lambda _: {
+        "status": "idle",
+        "freshness": "fresh",
+        "rest": {"confirmed": True},
+    }
+    observations.replay_pending = lambda _: False
+    poller.tick()
+    assert store.status(request)["state"] == "complete"

@@ -2,7 +2,7 @@
 
 from typing import Protocol
 
-RUNTIME_VERSION = 1
+RUNTIME_VERSION = 2
 OPERATIONS = frozenset(
     {
         "probe",

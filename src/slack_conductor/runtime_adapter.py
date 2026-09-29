@@ -2,6 +2,10 @@
 
 
 def local_runtime(config):
+    if config.runtime_adapter == "headless":
+        from .headless.runtime import HeadlessRuntime
+
+        return HeadlessRuntime(config)
     from .conductor.native import Conductor
     from .conductor.session_runtime import ConductorRuntime
 

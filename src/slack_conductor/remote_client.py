@@ -75,12 +75,18 @@ class Dispatcher:
 
 def run_client(config, token, stop, *, conductor=None, runtime=None):
     if conductor is None and runtime is None:
-        from .conductor.native import Conductor
+        from .runtime_adapter import local_runtime
 
-        conductor = Conductor(config)
+        runtime = local_runtime(config)
     dispatcher = Dispatcher(config, conductor, runtime)
     runtime = dispatcher.runtime
     runtime.start(dispatcher.receipts.bindings())
+    control = None
+    if config.runtime_adapter == "headless":
+        from .runtime_local import RuntimeServer
+
+        control = RuntimeServer(config.state_dir, runtime)
+        control.start()
     delay = 1
     try:
         while not stop.is_set():
@@ -168,4 +174,6 @@ def run_client(config, token, stop, *, conductor=None, runtime=None):
                 break
             delay = min(delay * 2, 30)
     finally:
+        if control is not None:
+            control.close()
         runtime.shutdown()

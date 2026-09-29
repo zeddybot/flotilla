@@ -171,7 +171,7 @@ class Poller:
             return
         session = self.db.session(status["session_id"])
         now = self.clock()
-        if session["status"] == "reconnecting":
+        if session["status"] == "reconnecting" or session.get("freshness") in {"stale", "unknown"}:
             self.idle_since.pop(status["id"], None)
             text = render("reconnecting", Turn.load(status["tracking"]).content)
             if self.last_text.get(status["id"]) != text:
@@ -203,13 +203,17 @@ class Poller:
             later_turn = turn.result_seq and self.db.has_later_turn(
                 status["session_id"], turn.result_seq, status["turn_id"]
             )
+            idle = session["status"] == "idle" and session.get("rest", {}).get("confirmed", True)
+            replay_pending = hasattr(self.db, "replay_pending") and self.db.replay_pending(
+                status["session_id"]
+            )
             ready = turn.ready(
-                now, session["status"] == "idle" or bool(later_turn), self.settle_seconds
+                now, (idle or bool(later_turn)) and not replay_pending, self.settle_seconds
             )
             blocked = {
-                "needs_user_input": "answer requested in Conductor",
-                "needs_user_permission": "permission requested in Conductor",
-                "needs_plan_response": "plan approval requested in Conductor",
+                "needs_user_input": "runtime needs attention; inspect the session",
+                "needs_user_permission": "permission requested in the session",
+                "needs_plan_response": "plan approval requested in the session",
             }
             if session["status"] in blocked and not turn.result_seq:
                 current = self.db.latest_turn(status["session_id"])
