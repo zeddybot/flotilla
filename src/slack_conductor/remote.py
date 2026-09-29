@@ -50,12 +50,24 @@ class RemoteConductor:
         self.last_ready = 0
         self.server = self.worker = None
         self.bindings = {}
+        self.slack_ready = None
 
     def authorize(self, connection, request):
         if not secrets.compare_digest(
             request.headers.get("Authorization", ""), "Bearer " + self.token
         ):
             return connection.respond(HTTPStatus.UNAUTHORIZED, "Unauthorized\n")
+        if request.path == "/status":
+            from dataclasses import replace
+
+            from .monitoring import report
+
+            snapshot = report(
+                replace(self.config, mode="server"),
+                runtime_ready=self.ready(),
+                slack_ready=self.slack_ready,
+            )
+            return connection.respond(HTTPStatus.OK, json.dumps(snapshot))
         if request.path == "/health":
             return connection.respond(HTTPStatus.OK, json.dumps({"ready": self.ready()}))
         if request.path != "/client" or request.headers.get("X-Client-ID") != self.config.client_id:

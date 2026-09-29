@@ -70,10 +70,10 @@ def service(tmp_path, monkeypatch, attempt, stop):
 
     monkeypatch.setattr(slack_app, "ConnectionHealth", health)
     conductor = SimpleNamespace(
-        db=None, start=Mock(), ready=Mock(), close=lambda: closed.append("native")
+        db=None, start=Mock(), ready=Mock(return_value=True), close=lambda: closed.append("native")
     )
     args = (
-        Config(),
+        Config(state_dir=tmp_path),
         store,
         conductor,
         {

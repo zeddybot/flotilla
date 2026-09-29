@@ -9,6 +9,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from .conductor.journal import Unconfirmed
 from .connection_health import ConnectionHealth
+from .monitoring import write_service_status
 from .notifications import Notifications
 from .poller import Poller
 from .presentation import render
@@ -305,6 +306,13 @@ def run(config, store, conductor, creds, stop):
         while True:
             started = time.monotonic()
             connected = link.connected()
+            conductor.slack_ready = connected
+            try:
+                write_service_status(
+                    config.state_dir, runtime_ready=conductor.ready(), slack_ready=connected
+                )
+            except OSError:
+                log.warning("Cannot persist service health snapshot")
             if stop.is_set():
                 break
             if connected and not announced:
