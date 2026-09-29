@@ -44,6 +44,8 @@ Configuration lookup for commands other than `init` is: explicit `--root` (direc
 
 Session commands require a client config and the local Conductor adapter. The current adapter reports reveal/open, interrupt/stop, and approval responses as unsupported capabilities. A running background job by itself is informational in monitoring.
 
-`--json` is a global option accepted before or after a subcommand. One-shot success prints `{"ok":true,"data":…}`; failure prints `{"ok":false,"error":{"code":…,"message":…}}`. Exit codes are `0` for success, `1` for a command or health failure, `2` for usage, and `130` for interruption. `session tail --follow --json` and `monitor --watch --json` emit one JSON object per update. Foreground `run` and raw `logs --follow` reject `--json`; follow logs stream plain text.
+By default, commands print readable text. `status` and `doctor` show a health summary and each check; `monitor` also shows incident transitions. Session commands show session IDs, details, and events with nested fields indented. Other structured command results use labeled fields. Text output is safe to display in a terminal and does not add color when redirected.
+
+Use `--json` for scripts. It is a global option accepted before or after a subcommand. Its output shape is unchanged: one-shot success prints `{"ok":true,"data":…}`; failure prints `{"ok":false,"error":{"code":…,"message":…}}`. Exit codes are `0` for success, `1` for a command or health failure, `2` for usage, and `130` for interruption. `session tail --follow --json` and `monitor --watch --json` emit one JSON object per update. Foreground `run` and raw `logs --follow` reject `--json`; follow logs stream plain text.
 
 This pilot does not include a public package, pairing, profiles, devices, or a setup wizard. Those designs are tracked separately in [the Flotilla design record](flotilla-design.md).
