@@ -6,11 +6,10 @@ Implementation in a branch is not evidence that the deployed pair was upgraded.
 
 ## Implemented in the Flotilla follow-up branch
 
-- A versioned session-runtime boundary and normalized events, with the integrated
-  Conductor adapter as its sole implementation. Native DB methods no longer form
+- A versioned session-runtime boundary and normalized events, implemented by Conductor and a headless Claude/Codex worker. Native DB methods no longer form
   the network API. See [runtime scope and limitations](runtime-interface.md).
 - The `flotilla` CLI, scriptable single-owner init, config discovery/validation,
-  session commands, JSON output, and staged Mac installation. Existing `sc` and
+  session commands, human-readable output by default, explicit `--json`, and staged Mac installation. Existing `sc` and
   service/state names remain compatible. See [commands and installation](flotilla-cli.md).
 - Local incident logs, health/status reporting, persistent delivery/receipt stall
   detection, and authenticated server status. No outbound monitoring alerts.
@@ -21,12 +20,13 @@ Implementation in a branch is not evidence that the deployed pair was upgraded.
 
 ## Immediate qualification and operations
 
-1. Local CI and isolated installation/transport checks pass; see
-   [qualification evidence](flotilla-qualification.md). Finish stack review and
-   schedule a coordinated transport-v2 server/client rollout. Preserve existing state and
-   keep rollback artifacts. Validate existing-session continuation, a fresh
-   session, queue/steer, replay after reconnect, callbacks, file delivery, and
-   archive through the deployed path. Do not infer this from unit tests alone.
+1. Review the runtime-v2 stack and schedule a coordinated server/client rollout.
+   Transport remains version 2; runtime version changes from 1 to 2 and mixed
+   runtime versions are rejected. Focused tests and isolated native/Daytona
+   qualification cover the new implementation; they do not upgrade production.
+   Preserve existing state and rollback artifacts. Validate existing-session
+   continuation, fresh sessions, queue/steer, replay after reconnect, callbacks,
+   file delivery, and archive through the deployed path.
 2. Observe the deployed monitoring snapshots/incidents over normal work. Add an
    external availability check only when local logs/CLI status are insufficient;
    no local process can report its own machine being completely down.
@@ -67,14 +67,24 @@ automation remain follow-up decisions.
 
 ## Further product work
 
-- Qualify Conductor interruption, reveal, and approval responses before enabling
-  those capabilities; `session stop` must never mean archive.
-- Complete durable logical-run/event correlation and explicit freshness,
-  configuration, and rest observations before treating the runtime as a stable
-  third-party plugin API. Add bounded replay/retention and process isolation when
-  introducing another adapter.
-- Build the first deliberately headless Daytona worker using Claude Code print
-  mode or Codex exec, then qualify the second engine and an interactive host.
+- Conductor reveal and interruption passed isolated live checks. Typed question,
+  approval, plan, Codex-permission and MCP responses are implemented and tested;
+  live pending-question qualification remains before calling all controls proven.
+- Durable event replay, ownership correlation, freshness, configuration and rest
+  gates now exist in both adapters. Continue crash/restore qualification and add
+  an explicit operator reconciliation flow before wider unattended operation.
+- The headless Daytona pilot passed real Claude/Codex create, queue, exact-ID
+  resume, replay, reconnect and file-transfer checks. Claude worktree editing also
+  passed. Codex nested sandboxing is incompatible with the tested default Daytona
+  container. The selected `external-sandbox` policy now also passes Codex file
+  editing, shell execution and resume after worker restart, using the Daytona
+  box as the execution boundary. The worker example selects this policy
+  explicitly; restricted policies remain available for other hosts.
+- Publish the build-qualified image as a Daytona snapshot and qualify its
+  dedicated server/worker deployment.
+  The existing server allows one client, so this worker cannot simply join beside
+  the Mac client. Keep [worker limitations and operations](headless-worker.md)
+  explicit before expanding to another host or interactive attachment.
 - Design pairing, per-device credentials/revocation, profiles, multiple clients,
   and collaborator permissions before implementing multiplayer routing.
 - Prepare a clean public install/distribution and license/security documentation.

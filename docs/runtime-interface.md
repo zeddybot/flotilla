@@ -1,78 +1,95 @@
 # Session runtime boundary
 
-This branch introduces runtime contract version 1 over transport version 2.
-Conductor remains the only implemented runtime. The server still owns Slack
-credentials, authorization, thread bindings, delivery, and presentation; the
-client owns native execution, agent credentials, workspace access, and snapshots.
+Runtime contract **version 2** runs over transport version 2. Upgrade the server
+and its client together: runtime v1 peers are rejected. This change adds bounded
+replay and a completion gate; an older server must not consume the new client.
+Conductor and the headless Claude/Codex worker implement the same session boundary.
 
-`runtime.py` defines the JSON-compatible operation contract. `remote_client.py`
-dispatches it without invoking native methods directly. `runtime_adapter.py`
-selects the integrated Conductor adapter; it is not yet an external plugin loader.
-`conductor/session_runtime.py` owns native bindings, command receipts, session
-specifications, message identity, and observation translation. A later headless
-runtime can implement the same boundary without pretending to be a desktop app.
+The server owns Slack credentials, authorization, thread bindings, delivery, and
+presentation. The client owns execution, engine credentials, workspace access,
+file snapshots, and normalized observations. Runtime selection is configured with
+`runtime_adapter = "conductor"` or `"headless"`. A server still owns exactly one
+client connection; this is not multi-worker routing or a third-party plugin SDK.
 
-| Operation | Contract / current support |
+| Operation | Contract |
 | --- | --- |
-| `probe` | Adapter version, readiness, capabilities, configuration policy |
-| `sessions`, `describe` | Enumerate owned bindings and their current state/configuration |
-| `create(command_id, spec)` | Create one durable session; repeat the same command safely |
-| `recover(workspace_id, session_id)` | Validate and reattach an existing native binding |
-| `submit(command_id, session_id, message_id, run_id, prompt, options)` | Native queue/steer with receipt reconciliation |
-| `observe(session_id, after, ...)` | Replay normalized events with a durable source cursor; scoped snapshots/receipts |
-| `close_session(command_id, session_id)` | Archive the bound Conductor workspace |
-| `interrupt`, `reveal`, `respond` | Explicitly unsupported by this adapter until qualified |
-| `files` | Existing bounded, restart-safe file snapshot/chunk/cleanup protocol |
+| `probe` | Runtime version, readiness, capability flags and configuration policy |
+| `sessions`, `describe` | Owned bindings, activity, configuration and pending native questions |
+| `create(command_id, spec)` | Durable session creation; retry the same command ID |
+| `recover(workspace_id, session_id)` | Validate and reattach an existing owned binding |
+| `submit(command_id, session_id, message_id, run_id, prompt, options)` | Journal delivery; native acceptance and observed pickup remain distinct |
+| `observe(session_id, after, limit, view)` | Bounded normalized replay and scoped snapshots/receipts |
+| `close_session(command_id, session_id)` | Archive a session; not an alias for interrupt |
+| `interrupt` | Cancel native work, preserving the session/workspace; report the observed acknowledgment accurately |
+| `reveal` | Open the exact existing Conductor session; headless does not support interactive attachment |
+| `respond` | Reply to an outstanding native request by ID; reject stale or foreign requests |
+| `files` | Bounded, restart-safe file preparation/chunk/cleanup protocol |
 
-Transport rejects the previous `native.*` and `db.*` RPCs. The server's
-`RuntimeObservations` view preserves its existing durable poller interface over
-`runtime.observe`. That compatibility view and the historical `RemoteConductor`
-class name are internal; clients do not implement a Conductor database API.
+## Identity, observations, and completion
 
-Conductor transcript translation happens on the client. The wire carries input,
-activity, output, tool/question, job-start/job-finish, and result events rather
-than native transcript JSON. Thinking content and nested/foreign output are not
-transported. Foreign result boundaries remain available for callback ownership.
-Source row identifiers and native segment identifiers are opaque, not portable
-engine semantics. Actual configuration is available in `describe`; final rest
-and background callback tracking remain the server poller's qualified state
-machine. A result event alone never establishes Done.
+Commands, input messages, logical runs, native segments and background jobs have
+separate identities. Delayed Conductor steering joins the original run once its
+pickup is observed. Persisted job ownership associates later callback segments
+with the originating run. Legacy events without proven ownership retain null
+message/run IDs; the adapter does not fabricate correlations.
 
-New sessions retain model/effort/fast settings from their creation specification.
-A changed setting in a follow-up produces a visible instruction to create a new
-session. Native selection failure retains the existing visible fallback policy;
-the requested configuration is not presented as proof of the effective setting.
-Queue/steer remains a per-message operation. Existing imported sessions preserve
-their current native configuration behavior rather than inventing a past spec.
+Events are normalized before transport. Thinking text and nested/foreign output
+are excluded. Conductor persists observed events in `runtime-events.sqlite`;
+headless persists them in `headless-events.sqlite`. Conductor's original row IDs
+remain opaque cursors so existing durable server receipts stay valid. An event
+is protected from native-history deletion once it has been imported; history
+removed before observation cannot be reconstructed.
 
-Commands, messages, runs, native segments, and jobs have separate identities.
-The adapter journals commands and message-to-segment correlations. CLI retries
-can supply `--command-id`; identical prompt text with distinct message IDs is
-not collapsed. Submission receipts distinguish native acceptance from observed
-pickup. Replaying a command returns its recorded acknowledgment, while fresh
-observations show later progress. For pre-migration messages and callback
-segments without a proven local correlation, `message_id`/`run_id` can be null;
-the server retains its existing durable ownership tracking. Do not infer a new
-logical run merely from a changed native segment ID.
+Replay defaults to 200 events, accepts limits from 1 through 500, and bounds each
+page by bytes. Consumers advance the returned cursor and honor `has_more`.
+`session tail` drains pages; the server does not finish a reply while replay has
+more pages. Retention is explicit maintenance after consumer acknowledgment,
+not automatic deletion. An expired cursor raises a resynchronization error with
+the retained boundary; it must never silently skip to the present.
 
-Replay uses Conductor's retained local transcript, so deleting native history
-also removes that replay source. This release does not introduce a second full
-event store, standalone plugin process protocol, profile routing, or a stable
-third-party SDK. Before advertising another adapter, qualify complete logical
-run correlation, explicit freshness/configuration/rest events, replay retention,
-and recovery against [the future-runtime plan](future-runtimes.md).
+Snapshots distinguish `fresh`, `stale`, and `unknown` observations. An idle
+SQLite record or disconnected worker cannot prove completion. The `rest` field
+separates a result candidate from observed completion, accounting for owned jobs
+and callbacks. The server retains its durable per-reply lifecycle and settlement
+window; it additionally requires fresh observations and the runtime's rest gate.
+A later independently observed turn may allow an earlier reply to settle.
 
-## Coordinated upgrade
+Conductor reports native model/effort/fast observations. Headless reports
+`configuration.requested` separately from `configuration.effective`; effective
+fields stay unknown unless the engine reports them. A session's requested
+configuration is fixed at creation. Headless native conversation IDs are explicit:
+Claude's UUID is reserved at creation, and Codex's emitted thread ID is persisted
+before pickup acknowledgment. Resumption never uses a directory-global `--last`.
 
-Transport versions 1 and 2 deliberately cannot communicate. Upgrade the server
-and client together during a controlled pause, preserving `bridge.sqlite`, both
-`remote.sqlite` databases, native journals, and the client token. The new client
-imports existing bindings and creates `runtime.sqlite`; it does not rewrite
-Slack thread identities. Validate ready/auth/version agreement, observe an
-existing session, then qualify new/send/replay/file/archive behavior before
-resuming normal intake. Keep the previous server image and client runtime for
-rollback. Restoring an old database over new accepted commands can duplicate or
-lose work; reconcile durable receipts before restoring state.
+## Execution and controls
 
-The branch's test/installation evidence does not mean the deployed server and
-Mac client have already been upgraded.
+The headless service owns process creation and serializes work per session. CLI
+commands use a private local socket rather than creating another process owner.
+Each session gets an isolated Git worktree. Queueing and retries are durable;
+steering, interactive reveal, and headless approval replies remain explicitly
+unsupported. Process exit alone does not establish a successful answer: a
+completion event and reconciliation of owned work are required.
+
+Conductor cancellation targets the current native turn and pauses the queue.
+Its native API acknowledges a request, not terminal process exit; `requested`
+means observe the session afterward. Questions/approvals bind exact native IDs.
+An acknowledgment lost across a frontend replacement remains unconfirmed rather
+than replaying an approval or cancellation into newer work.
+
+Headless stop cancels active and queued work and preserves the worktree. A fresh
+input can continue an intentionally interrupted session. After an ambiguous
+worker crash, affected work enters attention and is not rerun automatically.
+Inspect the preserved native conversation/worktree before deciding how to
+continue; there is no automated ambiguous-launch reconciliation command yet.
+See [worker operation and qualification](headless-worker.md).
+
+## Coordinated rollout
+
+Preserve server `bridge.sqlite`/`remote.sqlite`, client command journals, runtime
+event journals, workspace bindings, and private credentials. Do not restore an
+old database over newly accepted commands without reconciling receipts.
+
+The stack's tests and isolated native/Daytona qualification do not themselves
+upgrade the production server/client pair. Keep rollback code and validate the
+actual deployed versions, existing threads, queue/steer, callbacks, file delivery,
+and archive after the coordinated rollout.
