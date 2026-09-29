@@ -10,6 +10,7 @@ dependencies = [
   "pyobjc-framework-Cocoa>=11; sys_platform == 'darwin'",
   "pyobjc-framework-Quartz>=11; sys_platform == 'darwin'",
   "markdown-it-py>=4,<5",
+  "websockets>=15,<16",
 ]
 
 [project.scripts]
