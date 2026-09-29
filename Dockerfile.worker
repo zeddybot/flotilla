@@ -18,6 +18,6 @@ COPY scripts/worker_entrypoint.py ./scripts/
 RUN uv sync --frozen --no-dev --no-editable \
     && mkdir -p /data/config /data/state /data/workspaces /data/repos \
     && chown -R worker:worker /data
-ENV PATH="/app/.venv/bin:${PATH}" PYTHONUNBUFFERED=1
+ENV PATH="/app/.venv/bin:${PATH}" PYTHONUNBUFFERED=1 FLOTILLA_ISOLATED_WORKER=1
 USER worker
 ENTRYPOINT ["python", "/app/scripts/worker_entrypoint.py"]

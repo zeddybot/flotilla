@@ -63,8 +63,10 @@ class Config:
             raise ValueError("runtime_adapter must be conductor or headless")
         if cfg.engine not in {"claude", "codex"}:
             raise ValueError("engine must be claude or codex")
-        if cfg.engine_permission_policy not in {"read-only", "workspace-write"}:
-            raise ValueError("engine_permission_policy must be read-only or workspace-write")
+        if cfg.engine_permission_policy not in {"read-only", "workspace-write", "external-sandbox"}:
+            raise ValueError(
+                "engine_permission_policy must be read-only, workspace-write or external-sandbox"
+            )
         if not 1 <= cfg.server_port <= 65535:
             raise ValueError("server_port must be between 1 and 65535")
         if not cfg.client_id:

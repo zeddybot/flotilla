@@ -3,13 +3,13 @@
 import json
 
 from ..runtime import Unsupported
+from .permissions import validate
 
 
 def command(config, engine, native_id, prompt, *, first=False, spec=None):
     spec = spec or {}
     policy = spec.get("permission_policy") or config.engine_permission_policy
-    if policy not in {"read-only", "workspace-write"}:
-        raise ValueError("Headless permission policy must be read-only or workspace-write")
+    validate(policy)
     model = spec.get("model") or getattr(config, "engine_model", None)
     effort = spec.get("effort") or getattr(config, "engine_effort", None)
     if engine == "claude":
@@ -21,7 +21,11 @@ def command(config, engine, native_id, prompt, *, first=False, spec=None):
             "stream-json",
             "--verbose",
             "--permission-mode",
-            "plan" if policy == "read-only" else "acceptEdits",
+            {
+                "read-only": "plan",
+                "workspace-write": "acceptEdits",
+                "external-sandbox": "bypassPermissions",
+            }[policy],
         ]
         args += (
             (["--session-id", native_id] if first else ["--resume", native_id]) if native_id else []
@@ -32,7 +36,12 @@ def command(config, engine, native_id, prompt, *, first=False, spec=None):
             args += ["--effort", effort]
         return args
     if engine == "codex":
-        args = [str(config.codex_binary), "exec", "-s", policy]
+        args = [
+            str(config.codex_binary),
+            "exec",
+            "-s",
+            "danger-full-access" if policy == "external-sandbox" else policy,
+        ]
         args += ["-c", 'approval_policy="never"']
         if native_id:
             args += ["resume", native_id]
