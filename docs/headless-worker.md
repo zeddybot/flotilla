@@ -69,3 +69,18 @@ state. The default remains `read-only`; `workspace-write` keeps inner controls.
 
 Claude's `workspace-write` mode uses `acceptEdits`, which passed a real file-edit
 check. Other tool approvals can still be denied in noninteractive execution.
+
+## Qualification of this pilot
+
+The pinned image builds for Linux amd64. Its nonroot user can run both engine
+binaries and the installed Flotilla CLI; the packaged supervisor waits for
+provisioning and exits cleanly on SIGTERM. The image has not yet been published
+as a Daytona snapshot.
+
+A separate real Daytona sandbox running the source passed Claude and Codex
+create, queued inputs, explicit-native-ID resume, duplicate-command handling,
+reconnect/replay and exact-byte file transfer through an isolated loopback
+control server. Claude also created a requested file with `workspace-write`.
+Codex file tools remain unqualified on that host until the external execution
+boundary is selected and tested. These checks did not send Slack messages or
+replace the production Mac client.

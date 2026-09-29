@@ -78,7 +78,8 @@ automation remain follow-up decisions.
   passed. Codex nested sandboxing is incompatible with the tested default Daytona
   container: qualify explicit `external-sandbox` policy only after selecting the
   isolated worker as the execution boundary. Never silently relax permissions.
-- Build and qualify the packaged snapshot and dedicated server/worker deployment.
+- Publish the build-qualified image as a Daytona snapshot and qualify its
+  dedicated server/worker deployment.
   The existing server allows one client, so this worker cannot simply join beside
   the Mac client. Keep [worker limitations and operations](headless-worker.md)
   explicit before expanding to another host or interactive attachment.
