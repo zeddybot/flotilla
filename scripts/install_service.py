@@ -1,4 +1,4 @@
-"""Install a stable private runtime and a per-user macOS LaunchAgent."""
+"""Install the Mac client runtime and a per-user LaunchAgent."""
 
 import argparse
 import json
@@ -7,7 +7,6 @@ import plistlib
 import shutil
 import subprocess
 import time
-from dataclasses import replace
 from pathlib import Path
 
 from slack_conductor.config import Config, remote_credentials
@@ -30,7 +29,7 @@ def unload(domain):
         time.sleep(0.25)
 
 
-def plist(runtime, state, mode="local"):
+def plist(runtime, state):
     return {
         "Label": LABEL,
         "ProgramArguments": [
@@ -39,7 +38,7 @@ def plist(runtime, state, mode="local"):
             "slack_conductor",
             "--root",
             str(runtime),
-            "client" if mode == "client" else "daemon",
+            "client",
         ],
         "WorkingDirectory": str(runtime),
         "RunAtLoad": True,
@@ -58,7 +57,7 @@ def plist(runtime, state, mode="local"):
     }
 
 
-def runtime_config(source, runtime, mode):
+def runtime_config(source, runtime):
     """Write install-specific settings without placing a token in TOML."""
     lines = source.read_text().splitlines(keepends=True) if source.exists() else []
     section = next((i for i, line in enumerate(lines) if line.lstrip().startswith("[")), len(lines))
@@ -69,9 +68,8 @@ def runtime_config(source, runtime, mode):
     ]
     if head and not head[-1].endswith("\n"):
         head[-1] += "\n"
-    head.append(f"mode = {json.dumps(mode)}\n")
-    if mode == "client":
-        head.append(f"remote_token_file = {json.dumps(str(runtime / 'remote.token'))}\n")
+    head.append('mode = "client"\n')
+    head.append(f"remote_token_file = {json.dumps(str(runtime / 'remote.token'))}\n")
     return "".join(head + lines[section:])
 
 
@@ -79,14 +77,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--uninstall", action="store_true")
     parser.add_argument("--prepare-only", action="store_true")
-    parser.add_argument("--mode", choices=("local", "client"))
     args = parser.parse_args()
     os.umask(0o077)
     root = Path(__file__).resolve().parents[1]
     config = Config.load(root)
-    mode = args.mode or config.mode
-    if mode not in {"local", "client"}:
-        raise ValueError("installer mode must be local or client")
     state = config.state_dir
     domain = f"gui/{os.getuid()}"
     target = Path.home() / "Library/LaunchAgents" / f"{LABEL}.plist"
@@ -95,8 +89,9 @@ def main():
         target.unlink(missing_ok=True)
         print("LaunchAgent removed; credentials, runtime, and thread history retained")
         return
-    if mode == "client":
-        remote_credentials(replace(config, mode="client"))
+    if config.mode != "client":
+        raise ValueError("installer requires a Mac client configuration")
+    remote_credentials(config)
     runtime = state / ("runtime-prepared" if args.prepare_only else "runtime")
     uv = shutil.which("uv")
     if not uv:
@@ -109,15 +104,11 @@ def main():
         if source.exists():
             shutil.copyfile(source, runtime / filename)
             (runtime / filename).chmod(0o600)
-    (runtime / "config.toml").write_text(runtime_config(root / "config.toml", runtime, mode))
+    (runtime / "config.toml").write_text(runtime_config(root / "config.toml", runtime))
     (runtime / "config.toml").chmod(0o600)
-    if mode == "client":
-        (runtime / ".env").unlink(missing_ok=True)
-        shutil.copyfile(config.remote_token_file, runtime / "remote.token")
-        (runtime / "remote.token").chmod(0o600)
-    elif (root / ".env").exists():
-        shutil.copyfile(root / ".env", runtime / ".env")
-        (runtime / ".env").chmod(0o600)
+    (runtime / ".env").unlink(missing_ok=True)
+    shutil.copyfile(config.remote_token_file, runtime / "remote.token")
+    (runtime / "remote.token").chmod(0o600)
     # Install the exact source tree so retired bridge modules cannot survive an upgrade.
     if (runtime / "src").exists():
         shutil.rmtree(runtime / "src")
@@ -131,7 +122,7 @@ def main():
     if args.prepare_only:
         target = state / "prepared-launchagent.plist"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(plistlib.dumps(plist(runtime, state, mode)))
+    target.write_bytes(plistlib.dumps(plist(runtime, state)))
     target.chmod(0o600)
     subprocess.run(["plutil", "-lint", str(target)], check=True)
     if args.prepare_only:

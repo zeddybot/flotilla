@@ -1,3 +1,6 @@
+mode = "client"
+server_url = "wss://<preview-host>/client"
+remote_token_file = "remote.token"
 repo = "/Users/sameer/Documents/work/prodex/ttd"
 workspace_root = "~/conductor/workspaces/ttd"
 conductor_db = "~/Library/Application Support/com.conductor.app/conductor.db"

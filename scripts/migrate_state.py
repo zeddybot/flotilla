@@ -49,7 +49,7 @@ def file_digest(path):
     return digest.hexdigest()
 
 
-def snapshot_members(database, state_dir, *, for_local=False):
+def snapshot_members(database, state_dir):
     """Locate only snapshots still referenced by durable upload plans."""
     uploads = (state_dir / "uploads").resolve()
     records = []
@@ -63,16 +63,6 @@ def snapshot_members(database, state_dir, *, for_local=False):
                 # Completed replies have already deleted their upload snapshots.
                 continue
             for index, item in enumerate(plan.get("files", [])):
-                if (
-                    for_local
-                    and item.get("remote_snapshot")
-                    and not item.get("snapshot")
-                    and not item.get("permalink")
-                    and not item.get("error")
-                ):
-                    raise ValueError(
-                        "remote file transfer is incomplete; drain uploads before rollback"
-                    )
                 if not item.get("snapshot"):
                     continue
                 source = Path(item["snapshot"])
@@ -101,7 +91,7 @@ def add_file(archive, source, name):
         archive.addfile(info, data)
 
 
-def export_state(state_dir, output, *, for_local=False):
+def export_state(state_dir, output):
     state_dir, output = Path(state_dir).resolve(), Path(output).resolve()
     with inactive(state_dir):
         if not (state_dir / "bridge.sqlite").is_file():
@@ -117,7 +107,7 @@ def export_state(state_dir, output, *, for_local=False):
                         "size": (work / name).stat().st_size,
                         "sha256": file_digest(work / name),
                     }
-            snapshots = snapshot_members(work / "bridge.sqlite", state_dir, for_local=for_local)
+            snapshots = snapshot_members(work / "bridge.sqlite", state_dir)
             manifest = {"version": 1, "databases": files, "snapshots": snapshots}
             fd, temporary = tempfile.mkstemp(prefix=".state-", suffix=".tar.gz", dir=output.parent)
             os.close(fd)
@@ -258,18 +248,13 @@ def main():
     export = commands.add_parser("export")
     export.add_argument("--state-dir", type=Path, required=True)
     export.add_argument("--output", type=Path, required=True)
-    export.add_argument(
-        "--for-local",
-        action="store_true",
-        help="reject incomplete remote file transfers before local rollback",
-    )
     restore = commands.add_parser("import")
     restore.add_argument("--state-dir", type=Path, required=True)
     restore.add_argument("--archive", type=Path, required=True)
     restore.add_argument("--replace", action="store_true")
     args = parser.parse_args()
     if args.command == "export":
-        print(export_state(args.state_dir, args.output, for_local=args.for_local))
+        print(export_state(args.state_dir, args.output))
     else:
         import_state(args.archive, args.state_dir, replace=args.replace)
 

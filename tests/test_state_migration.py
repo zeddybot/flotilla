@@ -97,7 +97,7 @@ def test_completed_upload_snapshot_already_cleaned_is_not_required(tmp_path):
     assert plan["files"][0]["file_id"] == "F123"
 
 
-def test_local_rollback_refuses_incomplete_remote_download(tmp_path):
+def test_server_migration_preserves_incomplete_remote_download(tmp_path):
     source = tmp_path / "server"
     status_id = populated_state(source)
     with closing(sqlite3.connect(source / "bridge.sqlite")) as conn, conn:
@@ -105,9 +105,11 @@ def test_local_rollback_refuses_incomplete_remote_download(tmp_path):
             "UPDATE statuses SET state='delivering',attachments=? WHERE id=?",
             (json.dumps({"files": [{"remote_snapshot": "digest", "length": 42}]}), status_id),
         )
-    with pytest.raises(ValueError, match="drain uploads"):
-        export_state(source, tmp_path / "rollback.tar.gz", for_local=True)
-    assert not (tmp_path / "rollback.tar.gz").exists()
+    archive = export_state(source, tmp_path / "transfer.tar.gz")
+    destination = tmp_path / "replacement-server"
+    import_state(archive, destination)
+    plan = json.loads(Store(destination / "bridge.sqlite").status(status_id)["attachments"])
+    assert plan["files"] == [{"remote_snapshot": "digest", "length": 42}]
 
 
 def test_import_rejects_path_traversal_before_writing_state(tmp_path):

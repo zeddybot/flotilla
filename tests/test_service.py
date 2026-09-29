@@ -38,11 +38,11 @@ def test_client_plist_and_runtime_config_contain_no_slack_credentials(tmp_path):
     runtime = tmp_path / "runtime"
     source = tmp_path / "config.toml"
     source.write_text(
-        'mode = "local"\nremote_token_file = "/old/token"\n[models]\nsol = "GPT-6 Sol"\n'
+        'mode = "client"\nremote_token_file = "/old/token"\n[models]\nsol = "GPT-6 Sol"\n'
     )
-    settings = installer.runtime_config(source, runtime, "client")
+    settings = installer.runtime_config(source, runtime)
     assert 'mode = "client"' in settings
     assert f'remote_token_file = "{runtime / "remote.token"}"' in settings
     assert "/old/token" not in settings
     assert '[models]\nsol = "GPT-6 Sol"' in settings
-    assert installer.plist(runtime, tmp_path, "client")["ProgramArguments"][-1] == "client"
+    assert installer.plist(runtime, tmp_path)["ProgramArguments"][-1] == "client"

@@ -15,6 +15,25 @@ from slack_conductor.remote import RemoteConductor
 TOKEN = "secret-token-with-at-least-thirty-two-chars"
 
 
+def test_removed_daemon_command_is_rejected_before_loading_configuration(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["sc", "daemon"])
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize(
+    "command",
+    [["new", "/repo", "prompt"], ["send", "w", "prompt"], ["archive", "w"], ["tail", "s"]],
+)
+def test_native_commands_reject_server_configuration(tmp_path, monkeypatch, command):
+    (tmp_path / "config.toml").write_text(f'mode = "server"\nstate_dir = "{tmp_path / "state"}"\n')
+    monkeypatch.setattr(sys, "argv", ["sc", "--root", str(tmp_path), *command])
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 2
+
+
 def test_server_doctor_checks_authenticated_health_without_native_adapter(
     tmp_path, monkeypatch, capsys
 ):

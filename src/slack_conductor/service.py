@@ -20,12 +20,12 @@ def enforce_shutdown(stop, *, timeout=30, exit_process=os._exit):
     exit_process(1)
 
 
-def daemon(root, config, conductor):
+def server(root, config, conductor):
     lock, stop = _start(config)
     try:
         run(config, Store(config.state_dir / "bridge.sqlite"), conductor, credentials(root), stop)
     except Exception:
-        logging.getLogger(__name__).exception("Daemon stopped")
+        logging.getLogger(__name__).exception("Server stopped")
         raise
     finally:
         stop.set()
@@ -33,7 +33,7 @@ def daemon(root, config, conductor):
 
 
 def client(root, config, token):
-    """Run the remote Mac executor under the same lock as the local daemon."""
+    """Run one Mac executor for this state directory."""
     from .remote import run_client
 
     lock, stop = _start(config)
