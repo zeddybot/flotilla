@@ -15,7 +15,7 @@ daytona create --name flotilla-headless-worker --snapshot flotilla-headless-work
 
 These snapshot and create flags are in [Daytona's CLI reference](https://www.daytona.io/docs/en/tools/cli/). The worker needs no public inbound port. Provision `/data/config/config.toml` from [config.worker.example.toml](../config.worker.example.toml), `/data/config/client.token`, and a checked-out private repository at `/data/repos/project`. Set the token file to mode `600` and private directories to `700`, owned by the container's `worker` user. The control server must have the same application token for this dedicated client. Daytona's [Python SDK file upload](https://www.daytona.io/docs/en/python-sdk/sync/file-system/) or authenticated SSH can provision files; do not put credentials in the image, Docker build context, command arguments, or logs.
 
-Provide engine authentication to the worker user separately. Claude can use `ANTHROPIC_API_KEY`; Codex can use a private `CODEX_HOME` with its existing authentication. Keep values out of `config.toml` and the snapshot. The worker image pins Claude Code `2.1.284` and Codex `0.155.1`; it does not provide credentials. Set `server_url` to the dedicated control server's `wss://…/client` URL, `repo` to the repository's absolute path, and `client_id` to the identity configured on that server. Start with `engine_permission_policy = "read-only"` and `send_mode = "queue"`.
+Provide engine authentication to the worker user separately. Claude can use `ANTHROPIC_API_KEY`; Codex can use a private `CODEX_HOME` with its existing authentication. Keep values out of `config.toml` and the snapshot. The worker image pins Claude Code `2.1.284` and Codex `0.155.1`; it does not provide credentials. Set `server_url` to the dedicated control server's `wss://…/client` URL, `repo` to the repository's absolute path, and `client_id` to the identity configured on that server. The Daytona example selects Codex with `engine_permission_policy = "external-sandbox"` and `send_mode = "queue"`: Codex runs without inner sandboxing or approval prompts, using the dedicated Daytona box as its execution boundary.
 
 The image entrypoint waits until `config.toml` exists, validates the config and application token, then supervises the client. On an unexpected client exit it restarts with bounded backoff. A `/data/config/HOLD` file stops the child and prevents restart until removed. Use `HOLD` before state backup or maintenance:
 
@@ -58,14 +58,16 @@ loopback or UID mappings). Installing bubblewrap alone did not resolve this.
 Restricted Codex text/resume works, but file-tool execution needs a compatible
 inner sandbox or an explicitly selected outer execution boundary.
 
-`engine_permission_policy = "external-sandbox"` is an opt-in for an isolated
+`engine_permission_policy = "external-sandbox"` is the selected Daytona policy for an isolated
 Linux worker marked `FLOTILLA_ISOLATED_WORKER=1`. It uses the worker container as
 the execution boundary: Codex receives `--sandbox danger-full-access`, and
 Claude receives `--permission-mode bypassPermissions`. This allows tools to act
 throughout that container, including its available credentials and network. It
 is never an automatic fallback and cannot be requested above the worker's
 configured policy. Do not enable it on a shared host or connect it to the Mac's
-state. The default remains `read-only`; `workspace-write` keeps inner controls.
+state. The general configuration default remains `read-only`; the dedicated
+Daytona example explicitly selects `external-sandbox`. `workspace-write` keeps
+inner controls for hosts that support them.
 
 Claude's `workspace-write` mode uses `acceptEdits`, which passed a real file-edit
 check. Other tool approvals can still be denied in noninteractive execution.
@@ -81,6 +83,7 @@ A separate real Daytona sandbox running the source passed Claude and Codex
 create, queued inputs, explicit-native-ID resume, duplicate-command handling,
 reconnect/replay and exact-byte file transfer through an isolated loopback
 control server. Claude also created a requested file with `workspace-write`.
-Codex file tools remain unqualified on that host until the external execution
-boundary is selected and tested. These checks did not send Slack messages or
+Codex passed the selected `external-sandbox` policy: file editing, Python shell
+execution, worker restart, exact-native-ID resume with conversation memory,
+duplicate-intake handling, confirmed completion and exact-byte file transfer. These checks did not send Slack messages or
 replace the production Mac client.

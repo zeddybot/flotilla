@@ -76,8 +76,10 @@ automation remain follow-up decisions.
 - The headless Daytona pilot passed real Claude/Codex create, queue, exact-ID
   resume, replay, reconnect and file-transfer checks. Claude worktree editing also
   passed. Codex nested sandboxing is incompatible with the tested default Daytona
-  container: qualify explicit `external-sandbox` policy only after selecting the
-  isolated worker as the execution boundary. Never silently relax permissions.
+  container. The selected `external-sandbox` policy now also passes Codex file
+  editing, shell execution and resume after worker restart, using the Daytona
+  box as the execution boundary. The worker example selects this policy
+  explicitly; restricted policies remain available for other hosts.
 - Publish the build-qualified image as a Daytona snapshot and qualify its
   dedicated server/worker deployment.
   The existing server allows one client, so this worker cannot simply join beside
