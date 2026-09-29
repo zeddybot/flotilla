@@ -100,6 +100,15 @@ class ConductorDB:
         )
         return rows[0] if rows else None
 
+    def pickup_message(self, sid, message_id):
+        rows = self.query(
+            "SELECT rowid AS seq,* FROM session_messages WHERE session_id=? AND id=? "
+            "AND role='user' AND sent_at IS NOT NULL AND cancelled_at IS NULL "
+            "AND turn_id IS NOT NULL ORDER BY rowid LIMIT 1",
+            (sid, message_id),
+        )
+        return rows[0] if rows else None
+
     def pending(self, sid, prompt):
         if self.query(
             "SELECT id FROM session_messages WHERE session_id=? AND role='user' "

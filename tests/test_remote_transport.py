@@ -1,5 +1,6 @@
 """Exercise the private server to Mac wire without a Slack or Conductor process."""
 
+import json
 import threading
 import time
 from dataclasses import replace
@@ -25,11 +26,35 @@ def eventually(predicate, timeout=5):
 
 
 class FakeDB:
+    def workspace(self, wid):
+        return {"id": wid, "state": "ready"}
+
     def session(self, sid):
         return {"id": sid, "status": "running"}
 
     def messages(self, sid, cursor):
-        return [{"seq": cursor + 1, "content": f"message from {sid}"}]
+        return (
+            [
+                {
+                    "seq": 1,
+                    "session_id": sid,
+                    "turn_id": "turn",
+                    "role": "assistant",
+                    "content": json.dumps({"type": "result", "result": f"message from {sid}"}),
+                }
+            ]
+            if cursor < 1
+            else []
+        )
+
+    def cursor(self, sid):
+        return 1
+
+    def pickup(self, sid, prompt):
+        return None
+
+    def pending(self, sid, prompt):
+        return False
 
 
 class FakeConductor:
@@ -58,7 +83,7 @@ class FakeConductor:
         self.created += 1
         return {"id": "w1", "active_session_id": "s1"}
 
-    def send(self, wid, sid, prompt, options):
+    def send(self, wid, sid, prompt, options, *, message_id=None):
         self.sent += 1
         self.send_started.set()
         if self.block_send:
@@ -111,7 +136,7 @@ def test_observations_are_bound_and_sql_is_not_exposed(remote_pair):
     assert server.db.messages("s1", 0)[0]["seq"] == 1
     with pytest.raises(RuntimeError, match="Unknown remote operation"):
         server.rpc("db.query", {"args": ["SELECT * FROM repos"]})
-    with pytest.raises(RuntimeError, match="not a bound session"):
+    with pytest.raises(RuntimeError, match="not owned"):
         server.db.session("unbound")
     assert native.created == 0
 
@@ -126,15 +151,15 @@ def test_durable_responses_survive_receipt_reopen(remote_pair):
     assert server.send("w1", "s1", "hello", {"send_mode": "queue"}) == "queued"
     assert server.send("w1", "s1", "hello", {"send_mode": "queue"}) == "queued"
     assert native.sent == 1
-    assert server.archive("w1", "s1") is True
-    assert server.archive("w1", "s1") is True
+    assert server.archive("w1", "s1") == ""
+    assert server.archive("w1", "s1") == ""
     assert native.archived == 1
     from slack_conductor.remote_journal import Receipts
 
     reopened = Receipts(config.state_dir / "remote.sqlite")
-    assert reopened.begin("create:create-1", "native.new_workspace", {"key": "create-1"}) == {
-        "value": {"id": "w1", "active_session_id": "s1"}
-    }
+    assert reopened.begin(
+        "runtime:create:create-1", "runtime.create", {"command_id": "create-1", "spec": {}}
+    ) == {"value": {"workspace_id": "w1", "session_id": "s1", "spec": {}}}
 
 
 def test_lost_ack_replay_does_not_repeat_native_send(tmp_path):
@@ -142,13 +167,28 @@ def test_lost_ack_replay_does_not_repeat_native_send(tmp_path):
     state.mkdir()
     config = Config(state_dir=state)
     native = FakeConductor()
+    dispatcher = Dispatcher(config, native)
+    assert dispatcher.execute(
+        {
+            "method": "runtime.recover",
+            "args": {"workspace_id": "w1", "session_id": "s1"},
+        }
+    ) == {"value": {"workspace_id": "w1", "session_id": "s1"}}
     request = {
-        "method": "native.send",
-        "key": "send:fixed",
-        "args": {"wid": "w1", "sid": "s1", "prompt": "hello", "options": {}},
+        "method": "runtime.submit",
+        "key": "runtime:send:fixed",
+        "args": {
+            "command_id": "runtime:send:fixed",
+            "session_id": "s1",
+            "message_id": "message-fixed",
+            "run_id": "run-fixed",
+            "prompt": "hello",
+            "options": {"send_mode": "steer"},
+        },
     }
-    first = Dispatcher(config, native).execute(request)
-    assert first == {"value": "queued"}
+    first = dispatcher.execute(request)
+    assert first["value"]["state"] == "queued"
+    assert first["value"]["message_id"] == "message-fixed"
     assert Dispatcher(config, native).execute(request) == first
     assert native.sent == 1
 

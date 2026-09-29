@@ -35,6 +35,9 @@ class NativeDB:
     def pickup(self, sid, prompt):
         return None
 
+    def pending(self, sid, prompt):
+        return False
+
     def workspace(self, wid):
         return {"id": wid, "state": "ready", "workspace_path": "/tmp"}
 
@@ -68,7 +71,7 @@ class Native:
     def validate(self, wid, sid=None):
         return {"id": wid, "active_session_id": sid}
 
-    def send(self, wid, sid, prompt, options):
+    def send(self, wid, sid, prompt, options, **kwargs):
         self.sends.append((wid, sid, prompt, options))
         return "queued"
 

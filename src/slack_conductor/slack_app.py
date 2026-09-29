@@ -128,7 +128,11 @@ class Bridge:
                 if saved["workspace_id"]:
                     workspace = self.conductor.validate(saved["workspace_id"], saved["session_id"])
                 elif not thread or command == "new":
-                    workspace = self.conductor.new_workspace(key)
+                    workspace = (
+                        self.conductor.create_session(key, options)
+                        if hasattr(self.conductor, "create_session")
+                        else self.conductor.new_workspace(key)
+                    )
                 else:
                     workspace = self.conductor.validate(
                         thread["workspace_id"], thread["session_id"]
