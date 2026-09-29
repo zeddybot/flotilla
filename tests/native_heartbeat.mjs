@@ -24,7 +24,8 @@ const install = () => {
     },
     session: {getSession: async () => ({}), setSessionAgentAndModel() {}, updateSessionModelConfiguration() {}},
     composer,
-    sidecar: {getSessionStatus: async () => ({status: 'idle'}), query() {}, resolveToolApproval() {}}
+    sidecar: {getSessionStatus: async () => ({status: 'idle'}), query() {}, resolveToolApproval() {}},
+    control: {getInitOptions() {}, cancelSession() {}, sendAskUserQuestionResponse() {}}
   };
   const context = {
     testExports, console, crypto: {randomUUID: () => String(Math.random())},

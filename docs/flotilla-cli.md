@@ -49,3 +49,29 @@ By default, commands print readable text. `status` and `doctor` show a health su
 Use `--json` for scripts. It is a global option accepted before or after a subcommand. Its output shape is unchanged: one-shot success prints `{"ok":true,"data":…}`; failure prints `{"ok":false,"error":{"code":…,"message":…}}`. Exit codes are `0` for success, `1` for a command or health failure, `2` for usage, and `130` for interruption. `session tail --follow --json` and `monitor --watch --json` emit one JSON object per update. Foreground `run` and raw `logs --follow` reject `--json`; follow logs stream plain text.
 
 This pilot does not include a public package, pairing, profiles, devices, or a setup wizard. Those designs are tracked separately in [the Flotilla design record](flotilla-design.md).
+
+## Runtime controls and headless engines
+
+```sh
+flotilla session open SESSION_ID
+flotilla session stop SESSION_ID
+flotilla session show SESSION_ID
+flotilla session respond SESSION_ID QUESTION_ID --answer 'selected answer'
+flotilla session respond SESSION_ID QUESTION_ID --approve
+flotilla session respond SESSION_ID QUESTION_ID --deny
+flotilla session respond SESSION_ID QUESTION_ID --response-file reply.json
+flotilla --root /data/config session new 'Inspect this repository' --engine claude --model haiku
+flotilla --root /data/config session new 'Inspect this repository' --engine codex
+```
+
+`session show` exposes pending request IDs when native discovery is available.
+Repeat `--answer` for multiple questions. Plan approvals use the discovered request
+kind. Structured Codex permission grants and MCP form responses require
+`--response-file` with explicit native response fields; they are never inferred
+from a generic approval. Conductor stop returns `requested` until observation
+confirms rest and pauses its queue. Resume that queue in Conductor when appropriate.
+
+`--engine` applies only to a headless worker configuration. Headless commands
+contact the running worker service over a private local socket. Its default send
+mode is queue, and `--steer`, interactive open, and native question replies are
+unsupported. `session tail` drains bounded replay pages even without `--follow`.
