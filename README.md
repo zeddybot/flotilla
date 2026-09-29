@@ -1,6 +1,6 @@
 # Conductor for Slack
 
-The planned successor is **Flotilla**, a shared Slack app with per-user clients and plugin-based agent profiles. See the [design decisions and discussion record](docs/flotilla-design.md) and [Daytona transport qualification](docs/daytona-transport.md). These describe the future architecture; the instructions below describe the deployed personal bridge.
+The current private, single-owner deployment runs the Slack server on Daytona and a native Conductor client on the Mac. It uses the existing **Conductor** Slack app and keeps the same thread, queue, steer, notification, and file behavior. The Mac connects outbound to the server; it still runs Conductor and the agent. See the [client/server deployment and rollback guide](docs/client-server-deployment.md) and [validation record](docs/client-server-validation.md). The broader **Flotilla** multiplayer and plugin design remains a [future plan](docs/flotilla-design.md).
 
 A personal Slack app that drives the local Conductor Mac app. Mention **@Conductor** or DM it to create a TTD workspace. Mention **@Conductor** on every channel follow-up to continue the same session; ordinary thread conversation is ignored. Direct messages do not require a mention. Agent results replace a status message in the thread. You can open and continue the same workspace in Conductor.
 
@@ -8,9 +8,33 @@ The bot always sends the configured owner a fresh DM when a reply reaches **Done
 
 Notification delivery is persisted separately from answer delivery. After a lost send response, the bridge checks DM history for the same notification before retrying. If the very first DM response is lost before the bridge knows the DM channel, sending a message to the bot supplies that identity and allows reconciliation. Slack desktop/mobile alerts still follow your Slack notification and Do Not Disturb settings.
 
-Only the configured Slack owner can issue commands. The bridge reads Conductor's SQLite database in read-only mode and calls its native services for agent actions. macOS Accessibility is used only to attach the native dispatcher. It never writes Conductor's database. Ordinary messages typed in Conductor are not relayed.
+Only the configured Slack owner can issue commands. The Daytona server owns Slack credentials and delivery state; the Mac client reads Conductor's SQLite database in read-only mode and calls its native services for agent actions. macOS Accessibility is used only to attach the native dispatcher. The bridge never writes Conductor's database. Ordinary messages typed in Conductor are not relayed.
 
 ## Install
+
+For the current Daytona server and Mac client, follow the [deployment guide](docs/client-server-deployment.md). It covers private configuration, state migration, validation, and rollback. The local mode below remains supported as the rollback path and for a fresh single-machine installation. Run only one Slack consumer at a time.
+
+### Mac client mode
+
+The Mac needs Conductor, [uv](https://docs.astral.sh/uv/), its existing repository/workspace paths, a `wss://` server URL ending in `/client`, and a private copy of the server's client token. Set these in the Mac's `config.toml`:
+
+```toml
+mode = "client"
+server_url = "wss://8765-<sandbox-id>.proxy.daytona.work/client"
+remote_token_file = "/absolute/private/path/client.token"
+```
+
+Keep the token file at mode `600`. Install or update the Mac LaunchAgent and check its connection after the server state has been migrated:
+
+```sh
+uv sync --frozen
+uv run python scripts/install_service.py --mode client
+uv run sc doctor
+```
+
+The client receives commands from the server and uses local Conductor credentials. Slack bot and app tokens stay on Daytona. Rerun the installer after client code, configuration, or token changes.
+
+### Local mode
 
 Requires macOS, Conductor, and [uv](https://docs.astral.sh/uv/). The adapter uses Python 3.12.
 
@@ -23,7 +47,7 @@ chmod 600 .env
 
 Review the repository and workspace paths in `config.toml`. The default target is `/Users/sameer/Documents/work/prodex/ttd`. Model labels are configurable because Conductor's picker can change.
 
-Create an app named **Conductor** at [Slack's app dashboard](https://api.slack.com/apps) using `slack-manifest.json`, install it in ProDex Labs, and generate an app-level token with `connections:write`. Put the following in `.env`:
+For a fresh installation, create an app named **Conductor** at [Slack's app dashboard](https://api.slack.com/apps) using `slack-manifest.json`, install it in ProDex Labs, and generate an app-level token with `connections:write`. Put the following in `.env`:
 
 ```dotenv
 SLACK_BOT_TOKEN=xoxb-your-bot-token
@@ -32,7 +56,7 @@ OWNER_SLACK_USER_ID=your-slack-user-id
 SLACK_TEAM_ID=your-slack-team-id
 ```
 
-`.env` and local `config.toml` are gitignored. Credentials must have mode `600`; the daemon refuses group/world-readable `.env` files. Tokens are never written into the launchd plist. This uses [Bolt Socket Mode](https://docs.slack.dev/tools/bolt-python/concepts/socket-mode/) without a public HTTP endpoint. Channel events and mention events are deduplicated, and channel messages require an explicit bot mention even in mapped threads.
+`.env` and local `config.toml` are gitignored. Credentials must have mode `600`; the daemon refuses group/world-readable `.env` files. Tokens are never written into the launchd plist. This uses [Bolt Socket Mode](https://docs.slack.dev/tools/bolt-python/concepts/socket-mode/) without a public Slack events HTTP endpoint. Channel events and mention events are deduplicated, and channel messages require an explicit bot mention even in mapped threads.
 
 Install the daemon, then verify its native attachment:
 
@@ -43,7 +67,7 @@ uv run sc doctor
 
 The installer copies a private runtime (including a mode-600 credential copy) into `~/Library/Application Support/slack-conductor/runtime`, installs locked production dependencies, and registers `~/Library/LaunchAgents/com.sameer.slack-conductor.plist`. This keeps the service independent of the development worktree. Rerun the installer after changing code, configuration, or credentials.
 
-The daemon starts **at user login after boot**, restarts after failure, and needs a logged-in desktop session to control Conductor. It cannot control the UI before login or while the Mac is asleep. If Accessibility access is denied, allow the runtime's Python interpreter under System Settings → Privacy & Security → Accessibility. `sc doctor` from a Conductor terminal does not prove the separate launchd process has permission; inspect the daemon log after installation.
+The local daemon, or the Mac client in the current split deployment, starts **at user login after boot**, restarts after failure, and needs a logged-in desktop session to control Conductor. It cannot control the UI before login or while the Mac is asleep. The Daytona server can still receive Slack requests while the Mac is offline; execution resumes after the client reconnects. If Accessibility access is denied, allow the runtime's Python interpreter under System Settings → Privacy & Security → Accessibility. `sc doctor` from a Conductor terminal does not prove the separate launchd process has permission; inspect the daemon log after installation.
 
 ```sh
 launchctl print "gui/$(id -u)/com.sameer.slack-conductor"
@@ -67,7 +91,7 @@ Invite **Conductor** to the channel first, then:
 @Conductor [new] start a fresh workspace for the next task
 ```
 
-The defaults are Fable 5.1, high effort, and steering. A follow-up while the agent is working goes into its running turn; `[queue]` waits and starts a separate turn afterward. An idle agent starts either kind immediately. Model tokens include `[astra]` → GPT-6 Astra, `[sol]` → 5.6 Sol, `[terra]` → 5.6 Terra, `[luna]` → 5.6 Luna, `[sonnet]` → Sonnet 5 1M, and `[alpha]` → OpenCode Zen's Union Alpha Free. Alpha uses Conductor's OpenCode integration through ACP, independent of picker favorites; effort uses the provider default and fast mode is unavailable. Add `alpha = "Union Alpha Free"` to `[models]` in an existing local `config.toml` to enable the alias there.
+The defaults are Fable 5.1, high effort, and steering. A follow-up while the agent is working goes into its running turn; `[queue]` waits and starts a separate turn afterward. An idle agent starts either kind immediately. Model tokens include `[astra]` → GPT-6 Astra, `[sol]` → GPT-6 Sol, `[terra]` → GPT-5.6 Terra, `[luna]` → GPT-6 Luna, `[sonnet]` → Sonnet 5 1M, and `[alpha]` → OpenCode Zen's Union Alpha Free. Alpha uses Conductor's OpenCode integration through ACP, independent of picker favorites; effort uses the provider default and fast mode is unavailable. Add `alpha = "Union Alpha Free"` to `[models]` in an existing local `config.toml` to enable the alias there.
 
 The prompt encourages agents to @mention people they address directly or need action from, using real Slack user IDs from the thread or Slack tools. The relevant person may be someone other than the dispatcher.
 
@@ -93,11 +117,11 @@ After steering pickup is confirmed, the run's status, content, and background-jo
 
 This handoff also applies when steering a run that is waiting on background work and Conductor assigns the follow-up a new native turn ID. The bridge checks job/callback state immediately before that follow-up, then transfers ownership before processing its output. A previous run that already finished its work keeps its separate reply, even if its Done update has not reached Slack yet.
 
-The private state directory contains `bridge.sqlite`, `native.sqlite` (commands and pause intent), `native-heartbeat.json`, `native-attachment.json` (the loopback address and token of the installed frontend), `daemon.lock`, rotating `daemon.log`, launchd startup logs. Treat all local logs and state as private because prompts, tool descriptions, and results can contain sensitive information.
+In the split deployment, Daytona's private state directory contains `bridge.sqlite`, `remote.sqlite`, upload snapshots, `daemon.lock`, and `daemon.log`. The Mac retains `native.sqlite` (commands and pause intent), `native-heartbeat.json`, `native-attachment.json` (the loopback address and token of the installed frontend), its client log, and launchd startup logs. Local mode keeps bridge and native state together on the Mac. Treat all logs and state as private because prompts, tool descriptions, and results can contain sensitive information.
 
 Incoming Slack messages are durably deduplicated by workspace/channel/message timestamp, including overlapping mention and message events. Restart recovery resumes queued/running turns and partially delivered results. Native sends have stable IDs and a durable command journal. Recovery checks both accepted messages and the native outbox before resubmitting an interrupted operation; workspace creation also reuses its original identity. Slack and local SQLite cannot commit atomically: deterministic Slack message IDs reduce duplicate posts, but this is not an exactly-once transport.
 
-A heartbeat watchdog declares the Socket Mode connection lost after 120 seconds without a new pong, after a sleep of 30 seconds or more, or after five transport errors. Repeated socket creation does not reset the pong deadline. The daemon then replaces the connection in-process, with backoff, so the Conductor attachment is left alone. It falls back to a launchd restart only if the service loop cannot replace the connection within 60 seconds or no connection stays stable for 3 minutes. Persisted turns resume either way. Messages never received during a Slack outage are not automatically recovered from channel history.
+A heartbeat watchdog declares the Socket Mode connection lost after 120 seconds without a new pong, after a sleep of 30 seconds or more, or after five transport errors. Repeated socket creation does not reset the pong deadline. The Slack service then replaces the connection in-process, with backoff. In local mode, launchd restarts the daemon if the service loop cannot replace the connection within 60 seconds or no connection stays stable for 3 minutes. The split deployment keeps the Mac's native attachment separate from Slack reconnection. Persisted turns resume either way. Messages never received during a Slack outage are not automatically recovered from channel history.
 
 Agent content uses Slack's native [Markdown blocks](https://docs.slack.dev/reference/block-kit/blocks/markdown-block/): headings, bold/italics (including nested emphasis), strikethrough, links, ordered/unordered lists, task lists, block quotes, dividers, tables, inline code, and fenced code blocks. All heading levels display at the same size; images become links. Code language tags enable syntax highlighting. The live status header stays above the formatted content, including on edits and continuations. Notification and accessibility fallback text is retained. If Slack rejects a Markdown payload (for example, more than 50 rendered blocks), the full text is delivered using Slack's basic text formatting instead.
 
@@ -120,7 +144,7 @@ such as app.py:42 or app.py#L42, and examples inside code blocks stay unchanged.
 Only link local files intended for everyone in the Slack conversation.
 
 The bridge waits for the final answer and all tracked background work, snapshots the
-selected files, and shows **📤 Sending · N files** while uploading. Steering follows the
+selected files on the Mac, transfers them to the server in split mode, and shows **📤 Sending · N files** while uploading. Steering follows the
 replacement reply; queued requests retain separate files. Upload IDs and progress survive
 restarts. Missing files or uploads that fail after bounded retries preserve the answer
 and show Needs attention with a reason beside each unavailable file. Limits are 10 distinct
@@ -129,7 +153,7 @@ Snapshots are removed after delivery. The app needs **files:write** for uploads 
 **files:read** to recover ambiguous finalization and retrieve file links; reinstall the
 Slack app after adding these scopes to an existing installation.
 
-Adapter-only commands:
+Adapter-only commands for local mode:
 
 ```sh
 uv run sc new /Users/sameer/Documents/work/prodex/ttd 'your prompt'
@@ -142,7 +166,7 @@ uv run sc daemon
 
 These commands act on real Conductor workspaces. Do not run the action commands concurrently with the daemon. The daemon takes an exclusive lock to prevent duplicate service instances.
 
-Targeted tests: `uv run pytest tests/test_db.py tests/test_bridge.py -q`. CI checks the bridge tests and Python formatting. Live macOS Accessibility and Slack installation require local verification. Design and original constraints: [SPEC.md](SPEC.md).
+See [the validation record](docs/client-server-validation.md) for test and live deployment evidence. Design and original constraints: [SPEC.md](SPEC.md).
 
 ## Native recovery
 
