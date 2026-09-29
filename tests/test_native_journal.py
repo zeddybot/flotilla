@@ -5,7 +5,7 @@ from urllib.request import Request, urlopen
 
 import pytest
 
-from slack_conductor.conductor.journal import Journal
+from slack_conductor.conductor.journal import Journal, Unconfirmed
 from slack_conductor.conductor.transport import Transport
 
 
@@ -46,6 +46,18 @@ def test_absent_command_only_retries_after_attachment_changes(tmp_path):
     assert journal.claim("new")["id"] == "m"
     assert not journal.complete("m", "old", {"value": "wrong"})
     assert journal.complete("m", "new", {"value": "ok"})
+
+
+@pytest.mark.parametrize("operation", ["interrupt", "respond"])
+def test_unconfirmed_control_does_not_replay_into_later_native_state(tmp_path, operation):
+    journal = Journal(tmp_path / "journal.sqlite")
+    journal.enqueue("control", {"op": operation, "sid": "s", "turn_id": "turn-1"})
+    journal.claim("old")
+    journal.reconnect("new", SimpleNamespace(accepted=lambda *_: False))
+    assert journal.claim("new") is None
+    assert not journal.complete("control", "old", {"value": "late"})
+    with pytest.raises(Unconfirmed, match="inspect the native session"):
+        journal.wait("control", 0.1)
 
 
 def test_deferred_send_waits_for_explicit_resume(tmp_path):

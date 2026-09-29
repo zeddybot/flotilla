@@ -50,6 +50,11 @@ class Journal:
             if existing["body"] != body:
                 raise ValueError("Command identity reused with different arguments")
 
+    def command(self, key):
+        with self.connect() as c:
+            row = c.execute("SELECT body FROM commands WHERE id=?", (key,)).fetchone()
+            return json.loads(row["body"]) if row else None
+
     def claim(self, generation):
         with self.connect() as c:
             c.execute("BEGIN IMMEDIATE")
@@ -100,6 +105,10 @@ class Journal:
                 row = c.execute("SELECT response,state FROM commands WHERE id=?", (key,)).fetchone()
             if row and row["state"] == "blocked":
                 raise Unconfirmed("Queue paused in Conductor")
+            if row and row["state"] == "uncertain":
+                raise Unconfirmed(
+                    "Conductor control outcome is unconfirmed; inspect the native session before retrying"
+                )
             if row and row["response"]:
                 result = json.loads(row["response"])
                 if "error" in result:
@@ -121,6 +130,13 @@ class Journal:
                     c.execute(
                         "UPDATE commands SET state='done',response=? WHERE id=?",
                         (json.dumps({"value": ""}), row["id"]),
+                    )
+                elif row["generation"] != generation and body["op"] in {"interrupt", "respond"}:
+                    # A native stop or response can complete before its acknowledgement.
+                    # Replaying it after replacement could affect a later turn or prompt.
+                    c.execute(
+                        "UPDATE commands SET state='uncertain',generation=NULL WHERE id=?",
+                        (row["id"],),
                     )
                 elif row["generation"] != generation:
                     c.execute(
