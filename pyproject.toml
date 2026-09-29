@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 sc = "slack_conductor.__main__:main"
+flotilla = "slack_conductor.cli:main"
 
 [build-system]
 requires = ["hatchling"]
