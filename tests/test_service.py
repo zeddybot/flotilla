@@ -32,3 +32,17 @@ def test_unload_stops_installation_if_old_job_never_exits(monkeypatch):
     monkeypatch.setattr(installer.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0))
     with pytest.raises(RuntimeError, match="runtime was left unchanged"):
         installer.unload("gui/501")
+
+
+def test_client_plist_and_runtime_config_contain_no_slack_credentials(tmp_path):
+    runtime = tmp_path / "runtime"
+    source = tmp_path / "config.toml"
+    source.write_text(
+        'mode = "local"\nremote_token_file = "/old/token"\n[models]\nsol = "GPT-6 Sol"\n'
+    )
+    settings = installer.runtime_config(source, runtime, "client")
+    assert 'mode = "client"' in settings
+    assert f'remote_token_file = "{runtime / "remote.token"}"' in settings
+    assert "/old/token" not in settings
+    assert '[models]\nsol = "GPT-6 Sol"' in settings
+    assert installer.plist(runtime, tmp_path, "client")["ProgramArguments"][-1] == "client"
