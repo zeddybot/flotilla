@@ -7,6 +7,7 @@ import sys
 import time
 from pathlib import Path
 
+from . import cli_output
 from .cli_config import CLIError, discover_root, init_config, load_config, validate_config
 
 
@@ -103,13 +104,11 @@ def _global_options(argv):
     return leading + rest
 
 
-def _render(value, json_output):
+def _render(value, json_output, command=None, action=None):
     if json_output:
         print(json.dumps({"ok": True, "data": value}, default=str, sort_keys=True), flush=True)
-    elif isinstance(value, str):
-        print(value, flush=True)
     elif value is not None:
-        print(json.dumps(value, indent=2, default=str, sort_keys=True), flush=True)
+        print(cli_output.render(value, command, action), flush=True)
 
 
 def _report(config, root):
@@ -210,20 +209,20 @@ def main(argv=None):
             events = _dispatch(args, root, config)
             if args.follow:
                 for event in events:
-                    _render(event, args.json)
+                    _render(event, args.json, "session", "tail")
             else:
-                _render({"events": list(events)}, args.json)
+                _render({"events": list(events)}, args.json, "session", "tail")
         elif args.command == "monitor" and args.watch:
             from .monitoring import Monitor
 
             monitor = Monitor(config)
             while True:
-                _render(monitor.check(_report(config, root)), args.json)
+                _render(monitor.check(_report(config, root)), args.json, "monitor")
                 time.sleep(args.interval)
         else:
             value = _dispatch(args, root, config)
             if not streaming:
-                _render(value, args.json)
+                _render(value, args.json, args.command, getattr(args, "action", None))
         return 0
     except KeyboardInterrupt:
         return 130
@@ -238,14 +237,14 @@ def main(argv=None):
                 json.dumps({"ok": False, "error": {"code": "service_failed", "message": message}})
             )
         else:
-            print(f"flotilla: {message}", file=sys.stderr)
+            print(cli_output.error(message, "service_failed"), file=sys.stderr)
         return 1
     except (CLIError, OSError, RuntimeError, ValueError) as exc:
         code = exc.code if isinstance(exc, CLIError) else "command_error"
         if json_output:
             print(json.dumps({"ok": False, "error": {"code": code, "message": str(exc)}}))
         else:
-            print(f"flotilla: {exc}", file=sys.stderr)
+            print(cli_output.error(str(exc), code), file=sys.stderr)
         return 2 if code == "usage_error" else 1
 
 
