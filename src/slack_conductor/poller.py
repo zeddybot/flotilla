@@ -120,6 +120,8 @@ class Poller:
         return self.store.status(status["id"])
 
     def tick(self):
+        if hasattr(self.uploads, "maintenance"):
+            self.uploads.maintenance()
         for status in self.store.active():
             try:
                 if status["state"] == "waiting":
@@ -154,6 +156,13 @@ class Poller:
             self.store.update(status["id"], discard_ts="[]")
         if status["state"] == "delivering":
             self.deliver(status)
+            return
+        if hasattr(self.db, "online") and not self.db.online():
+            self.idle_since.pop(status["id"], None)
+            text = render("reconnecting", Turn.load(status["tracking"]).content)
+            if self.last_text.get(status["id"]) != text:
+                self.slack.edit(status, text)
+                self.last_text[status["id"]] = text
             return
         workspace = self.db.workspace(status["workspace_id"])
         if workspace["state"] == "archived":

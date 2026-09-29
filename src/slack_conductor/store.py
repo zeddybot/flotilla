@@ -94,7 +94,9 @@ class Store:
         return {
             row["session_id"]: row["workspace_id"]
             for row in self.rows(
-                "SELECT session_id,workspace_id FROM threads WHERE state!='archived'"
+                "SELECT session_id,workspace_id FROM threads WHERE state!='archived' "
+                "UNION SELECT session_id,workspace_id FROM statuses "
+                "WHERE state IN ('waiting','active','delivering') AND session_id IS NOT NULL"
             )
         }
 
