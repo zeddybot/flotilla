@@ -1,8 +1,8 @@
 # Testing and merge protection
 
-The current implementation is a local Slack/Conductor bridge. Flotilla's server,
-remote clients, and plugin API remain a separate design. These tests protect
-observable behavior while allowing those components to move.
+The current implementation is a single-owner Slack server and native Mac client.
+The generalized runtime/plugin contract remains follow-up work. These tests
+protect observable behavior across the remote boundary.
 
 ## Boundaries to preserve
 
@@ -14,7 +14,7 @@ observable behavior while allowing those components to move.
 - The poller consumes session observations through named methods rather than SQL.
   `test_observation_contract.py` delivers statuses and a recovered final answer
   with an observation provider that has no database/query interface. This is a
-  useful seam for a future remote client; it is not a frozen network protocol.
+  seam used by the current remote client; it is not the final generic runtime protocol.
 - Native schema and SDK details belong in adapter tests. Keep broad behavior
   assertions about emitted replies, target sessions, preserved settings, and
   recovery, rather than private method call order or incidental table layout.
@@ -36,6 +36,8 @@ observable behavior while allowing those components to move.
 | Markdown pagination, source links, file/image delivery, upload recovery | `test_markdown.py`, `test_presentation.py`, `test_file_links.py`, `test_uploads.py`, `test_file_delivery.py` |
 | Personal notifications, lost acknowledgment, restart, attention episodes | `test_notifications.py`, `test_notification_lifecycle.py` |
 | Configuration, credentials, startup failure cleanup, launchd installation | `test_config.py`, `test_runtime_startup.py`, `test_service.py` |
+| Remote authentication, receipts, reconnection, offline admission, file transfer | `test_remote_*.py` |
+| Server supervision and state export/import | `test_server_supervision.py`, `test_state_migration.py` |
 
 `tests/support.py` contains common test setup; test modules do not import one
 another. Disposable SQLite databases test real persistence. Injected clocks and
