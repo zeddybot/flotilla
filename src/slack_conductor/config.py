@@ -3,12 +3,19 @@ import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
 
 @dataclass
 class Config:
+    mode: str = "local"
+    server_url: str = ""
+    server_host: str = "127.0.0.1"
+    server_port: int = 8765
+    client_id: str = "mac"
+    remote_token_file: Path | None = None
     repo: Path = Path("/Users/sameer/Documents/work/prodex/ttd")
     workspace_root: Path = Path.home() / "conductor/workspaces/ttd"
     conductor_db: Path = Path.home() / "Library/Application Support/com.conductor.app/conductor.db"
@@ -34,14 +41,45 @@ class Config:
     def load(cls, root: Path):
         path = root / "config.toml"
         data = tomllib.loads(path.read_text()) if path.exists() else {}
-        for key in ("repo", "workspace_root", "conductor_db", "state_dir"):
+        for key in ("repo", "workspace_root", "conductor_db", "state_dir", "remote_token_file"):
             if key in data:
-                data[key] = Path(data[key]).expanduser().resolve()
+                path_value = Path(data[key]).expanduser()
+                if key == "remote_token_file" and not path_value.is_absolute():
+                    path_value = root / path_value
+                data[key] = path_value.resolve()
         cfg = cls(**data)
         if cfg.send_mode not in {"queue", "steer"}:
             raise ValueError("send_mode must be queue or steer")
+        if cfg.mode not in {"local", "server", "client"}:
+            raise ValueError("mode must be local, server, or client")
+        if not 1 <= cfg.server_port <= 65535:
+            raise ValueError("server_port must be between 1 and 65535")
+        if not cfg.client_id:
+            raise ValueError("client_id must not be empty")
         cfg.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         return cfg
+
+
+def remote_credentials(config: Config) -> str:
+    """Read the private shared secret used by the remote server and Mac client."""
+    if config.mode not in {"server", "client"}:
+        raise ValueError("remote credentials require server or client mode")
+    if config.mode == "client":
+        url = urlsplit(config.server_url)
+        localhost = url.hostname in {"localhost", "127.0.0.1", "::1"}
+        if url.scheme != "wss" and not (url.scheme == "ws" and localhost):
+            raise ValueError("server_url must use wss (ws is allowed only for localhost)")
+        if not url.netloc or url.username or url.password or url.fragment:
+            raise ValueError("server_url must be a websocket URL without credentials or fragment")
+    if config.remote_token_file is None:
+        raise RuntimeError("remote_token_file is required")
+    path = config.remote_token_file
+    if not path.is_file() or path.stat().st_mode & 0o077:
+        raise RuntimeError("remote_token_file must exist with permissions 600")
+    token = path.read_text().strip()
+    if len(token) < 32:
+        raise RuntimeError("remote_token_file must contain at least 32 characters")
+    return token
 
 
 def credentials(root: Path):
