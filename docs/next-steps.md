@@ -1,66 +1,84 @@
-# Next steps after the single-owner client/server MVP
+# Next steps after the private client/server pilot
 
-The current product remains the private Conductor Slack app with one owner and
-one native Mac client. The runtime supports only server and client modes. This
-list records follow-ups; it does not claim they are implemented.
+The supported deployment remains one Slack owner, a Daytona control server, and
+one native Conductor Mac client. Server and client are the only service modes.
+Implementation in a branch is not evidence that the deployed pair was upgraded.
 
-## Generalized session interface
+## Implemented in the Flotilla follow-up branch
 
-Replace the Conductor-shaped network facade with a versioned session-runtime
-contract while retaining Conductor as the only supported adapter initially:
+- A versioned session-runtime boundary and normalized events, with the integrated
+  Conductor adapter as its sole implementation. Native DB methods no longer form
+  the network API. See [runtime scope and limitations](runtime-interface.md).
+- The `flotilla` CLI, scriptable single-owner init, config discovery/validation,
+  session commands, JSON output, and staged Mac installation. Existing `sc` and
+  service/state names remain compatible. See [commands and installation](flotilla-cli.md).
+- Local incident logs, health/status reporting, persistent delivery/receipt stall
+  detection, and authenticated server status. No outbound monitoring alerts.
+  See [operations](operations.md).
+- Written [public-release preparation](public-release-plan.md) and
+  [future-engine/host plan](future-runtimes.md). Neither changes GitHub visibility
+  nor builds another client.
 
-- Explicit capability discovery and session-start model/effort/fast configuration.
-- Create, recover, submit, observe, and close operations; respond, interrupt, and
-  reveal only where the adapter establishes support.
-- Distinct session, run, message, command, and background-job identities.
-- Separate received, queued, and picked-up acknowledgments.
-- Normalized output, activity, tool, question/approval, background-job, result,
-  actual-configuration, and confirmed-rest events.
-- Durable event replay and recovery snapshots; explicit stale/offline observations.
-- Adapter-owned native identifiers and Conductor transcript translation.
+## Immediate qualification and operations
 
-Keep Slack policy and presentation on the server. Keep native execution,
-credentials, recovery, and file snapshots on the Mac. Qualify the same existing
-queue/steer, callback, notification, file, and restart contracts during extraction.
-Additional adapters are a later step, not a prerequisite for this boundary.
+1. Local CI and isolated installation/transport checks pass; see
+   [qualification evidence](flotilla-qualification.md). Finish stack review and
+   schedule a coordinated transport-v2 server/client rollout. Preserve existing state and
+   keep rollback artifacts. Validate existing-session continuation, a fresh
+   session, queue/steer, replay after reconnect, callbacks, file delivery, and
+   archive through the deployed path. Do not infer this from unit tests alone.
+2. Observe the deployed monitoring snapshots/incidents over normal work. Add an
+   external availability check only when local logs/CLI status are insufficient;
+   no local process can report its own machine being completely down.
+3. Rotate the exposed Slack bot and Socket Mode tokens. Sameer will do this;
+   install/validate replacements before retiring old credentials.
+4. Retain the existing manual backup for now. Recommend a small scheduled,
+   off-server backup and periodic restore exercise as the next reliability task;
+   no new backup infrastructure is part of this change.
+5. Qualify actual Mac sleep/wake, Conductor restart/upgrade, Slack network outage,
+   and multi-day Daytona operation. Preserve the limits around Slack events
+   never received and native approvals that cannot be reconstructed.
+6. Resolve the unavailable OpenCode Alpha route explicitly, without mapping the
+   name silently to an unrelated model.
 
-## CLI polish and installation
+## Why retain an off-server copy?
 
-- Install an executable usable from bash/zsh without a hand-written wrapper.
-- Discover configuration independently of the current directory.
-- Integrate client install/uninstall/status/start/stop/restart/logs and server
-  operational commands with clear host-local semantics.
-- Add config validation and consistent machine-readable JSON output.
-- Define session list/show/open/stop separately from workspace archive.
-- Keep setup scriptable; design pairing/profile/device commands only when their
-  corresponding identity and routing capabilities are implemented.
+Daytona's sandbox filesystem persists across stop/start and archival. That is
+useful durability, but it does not undo accidental deletion, database corruption,
+or a bad migration. The [Daytona persistence documentation](https://www.daytona.io/docs/en/persistence/)
+distinguishes sandbox lifetime from persistent storage. A backup should have a
+separate deletion/failure boundary and a tested restoration procedure.
 
-## Operations and remaining qualification
+For this small single-owner service, prefer a daily SQLite-consistent backup of
+the server's delivery/thread databases and essential deployment configuration,
+with private/encrypted storage and a short retention window. Preserve separately
+the client's native/remote/runtime command journals and binding state. Keep
+credentials in an appropriate private recovery store, not a general source or
+test artifact. Define how to reconcile pending commands before restoring either
+side; a database restored to an earlier time can replay already executed work.
 
-- Restore GitHub Actions billing while the repository remains private. The
-  complete local CI commands are the currently authorized merge validation.
-- Enable and verify the checked-in main ruleset when the account/repository
-  supports it; the JSON file alone does not enforce protection.
-- Rotate the exposed Slack bot and Socket Mode tokens. Sameer will do this;
-  update the server credentials and verify reconnection afterward.
-- Automate recurring off-server backups, retention, and restore checks. Avoid
-  making a routine backup silently drop Slack intake during a maintenance hold.
-- Add operational monitoring for disconnects, delivery backlog, disk growth,
-  stale snapshots/receipts, and prolonged server failure.
-- Qualify actual Mac sleep/wake, Conductor restart/upgrade, Slack network outage,
-  and multi-day Daytona operation. Preserve current limitations: no automatic
-  history backfill for events never received and no reconstructed lost approvals.
-- Resolve the unavailable OpenCode Alpha model explicitly; do not silently map
-  the alias to an unrelated model.
+Use SQLite's backup mechanism rather than copying an active database file alone.
+Validate row counts/integrity and rehearse restore in an isolated environment
+without connecting a second Slack consumer. Keep active SQLite on a filesystem
+with suitable locking semantics; an object/FUSE-backed
+[Daytona volume](https://www.daytona.io/docs/en/volumes/) is not automatically a
+drop-in WAL filesystem. Backup scheduling, destination, retention, and restore
+automation remain follow-up decisions.
 
-## Later product work, requiring separate scope
+## Further product work
 
-- Prepare for a public repository soon, but keep it private until explicitly
-  authorized. Review tracked files/history, personal configuration, credentials,
-  licensing, and public setup documentation before publishing.
-- Rebranding remains deferred.
-- Multiplayer, per-user routing, device identities, profiles, and revocation
-  remain deferred.
-- Additional clients/hosts/engines remain deferred and require parity evidence.
+- Qualify Conductor interruption, reveal, and approval responses before enabling
+  those capabilities; `session stop` must never mean archive.
+- Complete durable logical-run/event correlation and explicit freshness,
+  configuration, and rest observations before treating the runtime as a stable
+  third-party plugin API. Add bounded replay/retention and process isolation when
+  introducing another adapter.
+- Build the first deliberately headless Daytona worker using Claude Code print
+  mode or Codex exec, then qualify the second engine and an interactive host.
+- Design pairing, per-device credentials/revocation, profiles, multiple clients,
+  and collaborator permissions before implementing multiplayer routing.
+- Prepare a clean public install/distribution and license/security documentation.
+  Keep repository visibility, ruleset enforcement, Actions billing, and Slack app
+  rebranding unchanged until separately authorized.
 
-The broader design and open decisions remain in [the design record](flotilla-design.md).
+The broader proposals remain in [the design record](flotilla-design.md).

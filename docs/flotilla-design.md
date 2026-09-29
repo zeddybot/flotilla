@@ -1,6 +1,8 @@
 # Flotilla: design decisions and discussion record
 
-Recorded September 9, 2026. This captures the product and architecture discussions that followed the personal Slack–Conductor bridge. It is a design document, not a claim that the multi-user system exists. The current executable is still `sc`, the Slack app is still Conductor, and the deployed bridge remains owner-only.
+Recorded September 9, 2026. This captures the product and architecture discussions that followed the personal Slack–Conductor bridge. It is a design document, not a claim that the multi-user system exists. The Slack app remains Conductor and owner-only. The September follow-up adds the `flotilla` CLI while preserving `sc`; see [the implemented CLI](flotilla-cli.md) and [runtime boundary](runtime-interface.md) for current branch behavior, which is separate from deployment status.
+
+September 29 scope refinement: generalize the existing runtime, polish single-owner installation, and add local incident logs/CLI monitoring. Keep GitHub private and use local CI. Public-release preparation and additional clients/engines/hosts are plans only. The first future Daytona worker may deliberately be headless; [that plan](future-runtimes.md) records its visibility/capability limitations. The multi-user CLI proposal below remains a future design, not the current command reference.
 
 Operational follow-up: [Socket Mode reconnect incident and recovery](connection-incident.md).
 
@@ -20,7 +22,7 @@ A live product-name search found Flotilla in use by an [AI orchestration project
 
 Other brainstormed names included Portside, Berth, Tiller, Cove, Jetty, Mooring, Launch, Beacon, Sound, Skiff, Relay, Rally, Switchboard, Anchorage, Quay, Marina, Wharf, Dockside, Haven, Roadstead, Breakwater, Helm, Heading, Bearing, Waypoint, Passage, Fairway, Channel, Compass, Fleet, Armada, Convoy, Crew, Bosun, Lookout, Pilot, Tender, Tide, Current, Shoal, Seabound, Bluewater, Drift, Wake, Buoy, Dispatch, Junction, Rendezvous, Commons, Huddle, Tandem, Patchbay, Loom, Threadline, Concourse, Outpost, and Crossbar. These were ideas, not availability-checked alternatives.
 
-This remains a side project. Do not create Linear work tickets for it; the user explicitly asked to remove the original side-project ticket and ultimately accepted closing it. A future public launch or product rename is a separate action from adopting this working name.
+This remains a side project. The original discussion avoided work tickets; the current workspace instructions now require a ticket for PRs intended for main. A future public launch or product rename is a separate action from adopting this working name.
 
 ## Users, clients, profiles, and routing
 
@@ -101,7 +103,7 @@ Slack Socket Mode and the client-to-Flotilla transport are separate connections.
 
 ## CLI proposal
 
-One `flotilla` executable can run a server, a client, or both. No commands in this section are implemented yet.
+One `flotilla` executable can operate a server or a client. This section is the broader future proposal; [the CLI guide](flotilla-cli.md) lists the implemented single-owner subset and exact command spelling.
 
 `flotilla init` should guide the user through a server URL, browser authentication/pairing to prove their Slack identity, device naming, installed-tool detection, profile creation, default selection, and optional automatic startup. Each wizard step should also have a scriptable command.
 
