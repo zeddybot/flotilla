@@ -14,6 +14,8 @@ Only the configured Slack owner can issue commands. The Daytona server owns Slac
 
 The server and Mac client are the only runtime modes. Follow the
 [deployment guide](docs/client-server-deployment.md) to provision Daytona.
+For the host-local `flotilla` command, separate config directory, and service
+operations, see the [Flotilla CLI guide](docs/flotilla-cli.md).
 The server owns the Slack bot/app tokens; the Mac holds only its client token
 and existing Conductor credentials. For development, both processes can run on
 the same machine with `ws://localhost:8765/client` and separate state directories.
@@ -36,13 +38,13 @@ uv run python scripts/install_service.py
 uv run sc doctor
 ```
 
-The installer copies a private runtime into
+The installer builds a private runtime behind
 `~/Library/Application Support/slack-conductor/runtime`, installs locked
 production dependencies, and registers
 `~/Library/LaunchAgents/com.sameer.slack-conductor.plist`. It always installs
-client mode and removes any old Slack `.env` from that runtime. Rerun it after
+client mode and does not copy a Slack `.env` into the new runtime. Rerun it after
 client code, configuration, or token changes. It does not edit shell startup
-files or add `sc` to PATH.
+files or add `sc` to PATH; it creates a `flotilla` wrapper in `~/.local/bin`.
 
 The client starts at user login, restarts after failure, and needs a logged-in
 desktop session. Daytona can receive requests while the Mac is offline;
