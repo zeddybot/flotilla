@@ -60,6 +60,8 @@ def _parser():
     new.add_argument("prompt")
     new.add_argument("--repo", type=Path)
     new.add_argument("--command-id")
+    new.add_argument("--engine", choices=("claude", "codex"), help="engine on a headless worker")
+    new.add_argument("--model", help="model ID for this session")
     _send_mode(new)
     send = actions.add_parser("send")
     send.add_argument("session_id")
@@ -70,6 +72,21 @@ def _parser():
     tail.add_argument("session_id")
     tail.add_argument("--after", type=int, default=0)
     tail.add_argument("--follow", action="store_true")
+    respond = actions.add_parser("respond", help="answer a pending runtime question or approval")
+    respond.add_argument("session_id")
+    respond.add_argument("question_id")
+    respond.add_argument("--command-id")
+    reply = respond.add_mutually_exclusive_group(required=True)
+    reply.add_argument(
+        "--answer",
+        action="append",
+        help="answer each question in order; repeat for multiple questions",
+    )
+    reply.add_argument("--approve", action="store_true")
+    reply.add_argument("--deny", action="store_true")
+    reply.add_argument(
+        "--response-file", type=Path, help="JSON object for structured native responses"
+    )
     return parser
 
 
@@ -163,11 +180,33 @@ def _dispatch(args, root, config):
     if args.action == "show":
         return sessions.show_session(config, args.session_id)
     if args.action == "new":
-        return sessions.new_session(config, args.prompt, args.repo, args.send_mode, args.command_id)
+        return sessions.new_session(
+            config,
+            args.prompt,
+            args.repo,
+            args.send_mode,
+            args.command_id,
+            engine=args.engine,
+            model=args.model,
+        )
     if args.action == "send":
         return sessions.send(config, args.session_id, args.prompt, args.send_mode, args.command_id)
     if args.action == "tail":
         return sessions.tail(config, args.session_id, after=args.after, follow=args.follow)
+    if args.action == "respond":
+        if args.response_file:
+            if args.response_file.stat().st_size > 64 * 1024:
+                raise CLIError("Response file is too large", "usage_error")
+            response = json.loads(args.response_file.read_text())
+            if not isinstance(response, dict):
+                raise CLIError("Response file must contain a JSON object", "usage_error")
+        elif args.answer:
+            response = {"kind": "question", "answers": args.answer}
+        else:
+            response = {"kind": "approval", "decision": "allow" if args.approve else "deny"}
+        return sessions.respond(
+            config, args.session_id, args.question_id, response, args.command_id
+        )
     return {"open": sessions.open_session, "stop": sessions.stop, "archive": sessions.archive}[
         args.action
     ](config, args.session_id, args.command_id)

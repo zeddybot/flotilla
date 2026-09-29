@@ -1,5 +1,6 @@
 """Persist Conductor observations without exposing its transcript as a wire API."""
 
+import fcntl
 import time
 
 from ..lifecycle import Turn
@@ -25,6 +26,15 @@ class Observations:
             """)
 
     def ingest(self, sid):
+        # The daemon and short-lived CLI can observe the same native history.
+        # Serialize cursor advancement so a concurrent partial import cannot skip rows.
+        path = self.runtime.config.state_dir / "runtime-events.lock"
+        with path.open("a") as lock:
+            path.chmod(0o600)
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            self._ingest(sid)
+
+    def _ingest(self, sid):
         correlations = self.runtime._correlations(sid)
         db = self.runtime.native.db
         cursor = self.log.cursor(sid)
@@ -98,20 +108,17 @@ class Observations:
         )
         # A result is only a candidate. Explicit live idleness and all tracked
         # jobs/callbacks must agree before the adapter reports observed rest.
-        latest = (
-            self.runtime.native.db.latest_turn(sid)
-            if hasattr(self.runtime.native.db, "latest_turn")
-            else None
-        )
-        projection_key = sid + ":projection:" + str(latest)
+        projection_key = sid + ":projection"
         projection = self.log.snapshot(projection_key)
         turn = Turn.load(projection["value"]["turn"]) if projection else Turn()
         cursor = projection["value"]["cursor"] if projection else 0
         while True:
             page = self.log.page(sid, cursor)
             for row in page["events"]:
-                if latest is None or turn.accepts(row, latest):
-                    turn.consume(row)
+                if row["role"] == "user" and row.get("turn_id"):
+                    turn.result_seq = 0
+                    turn.settled_at = None
+                turn.consume(row)
             cursor = page["cursor"]
             if not page["has_more"]:
                 break

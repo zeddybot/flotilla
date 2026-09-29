@@ -8,6 +8,7 @@ and cursor semantics without exposing a client's database or native transcript.
 class RuntimeObservations:
     def __init__(self, remote):
         self.remote = remote
+        self.pending_pages = {}
 
     def online(self):
         return self.remote.ready()
@@ -33,7 +34,12 @@ class RuntimeObservations:
         return self._observe(sid, view="cursor")["cursor"]
 
     def messages(self, sid, after):
-        return self._observe(sid, after=after, view="events")["events"]
+        page = self._observe(sid, after=after, view="events")
+        self.pending_pages[sid] = page.get("has_more", False)
+        return page["events"]
+
+    def replay_pending(self, sid):
+        return self.pending_pages.get(sid, False)
 
     def pickup(self, sid, prompt):
         receipt = self._observe(sid, prompt=prompt, view="receipt")["receipt"]

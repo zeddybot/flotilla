@@ -287,6 +287,17 @@ def report(config, root=None, *, runtime_ready=None, slack_ready=None):
             "service": _lock_check(config.state_dir),
             "server_health": _server_health(config),
         }
+        if config.runtime_adapter == "headless":
+            from .runtime_local import RuntimeProxy
+
+            checks.pop("native_attachment")
+            try:
+                probe = RuntimeProxy(config.state_dir).probe()
+                checks["worker"] = _check(
+                    "ok" if probe.get("ready") else "warning", "headless worker readiness"
+                )
+            except (OSError, RuntimeError, ValueError):
+                checks["worker"] = _check("warning", "headless worker unavailable")
     return {
         "ok": all(item["state"] == "ok" for item in checks.values()),
         "role": config.mode,
