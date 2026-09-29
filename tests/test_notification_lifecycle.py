@@ -176,9 +176,9 @@ def test_startup_delivers_pending_dm_without_dispatching_agent_work(bridge_state
         ),
     )
     slack_app.run(
-        Config(),
+        Config(state_dir=store.path.parent),
         store,
-        SimpleNamespace(db=db, start=lambda _: None, close=lambda: None),
+        SimpleNamespace(db=db, start=lambda _: None, ready=lambda: True, close=lambda: None),
         {
             "SLACK_BOT_TOKEN": "test",
             "SLACK_APP_TOKEN": "test",

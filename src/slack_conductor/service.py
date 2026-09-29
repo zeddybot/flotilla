@@ -65,4 +65,7 @@ def _start(config):
     threading.Thread(
         target=enforce_shutdown, args=(stop,), name="shutdown-deadline", daemon=True
     ).start()
+    from .monitoring import watch
+
+    threading.Thread(target=watch, args=(config, stop), name="health-monitor", daemon=True).start()
     return lock, stop
