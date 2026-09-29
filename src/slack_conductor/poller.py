@@ -2,9 +2,9 @@ import json
 import logging
 import time
 
-from .conductor.db import classify
 from .lifecycle import Turn
 from .presentation import live, pages, render
+from .runtime_events import classify
 from .uploads import Uploads
 
 log = logging.getLogger(__name__)

@@ -3,6 +3,8 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
+from .events import normalize
+
 
 class ConductorDB:
     def __init__(self, path: Path):
@@ -57,7 +59,7 @@ class ConductorDB:
                 # ACP's stop reason is a completion boundary, not the answer.
                 # Preserve the preceding assistant text, as for Codex completions.
                 row["content"] = json.dumps({**event, "result": None})
-        return rows
+        return [{**row, "event": normalize(row)["event"]} for row in rows]
 
     def has_user_messages(self, sid):
         """An accepted outbox message freezes initial configuration too."""

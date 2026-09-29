@@ -37,14 +37,11 @@ class Turn:
             elif row["turn_id"] == self.callback_turn_id:
                 self.callback_turn_id = ""
             return row["turn_id"] == own_turn
-        try:
-            event = json.loads(row["content"])
-        except (ValueError, TypeError):
-            event = {}
+        event = row.get("event", {})
         if (
             isinstance(event, dict)
-            and event.get("type") == "result"
-            and event.get("conductor_sdk_metadata", {}).get("isForeignResult")
+            and event.get("kind") == "result"
+            and event.get("foreign")
             and row["turn_id"] in {own_turn, self.callback_turn_id}
         ):
             # A restored job can emit a foreign result before this user message's
@@ -54,12 +51,11 @@ class Turn:
             return False
         if (
             isinstance(event, dict)
-            and event.get("type") == "system"
-            and event.get("subtype") == "task_notification"
-            and not event.get("parent_tool_use_id")
-            and not event.get("conductor_sdk_metadata", {}).get("isForeignResult")
+            and event.get("kind") == "job_finished"
+            and not event.get("nested")
+            and not event.get("foreign")
         ):
-            task = event.get("task_id")
+            task = event.get("job_id")
             if task in self.tasks or task in self.ended:
                 self.callback_turn_id = row["turn_id"]
                 self.ignore_callback = False
@@ -73,23 +69,16 @@ class Turn:
     def consume(self, row):
         if row["role"] != "assistant":
             return False
-        try:
-            event = json.loads(row["content"])
-        except (ValueError, TypeError):
+        event = row.get("event", {})
+        if not isinstance(event, dict) or event.get("nested") or event.get("foreign"):
             return False
-        if (
-            not isinstance(event, dict)
-            or event.get("parent_tool_use_id")
-            or event.get("conductor_sdk_metadata", {}).get("isForeignResult")
-        ):
-            return False
-        kind, subtype = event.get("type"), event.get("subtype")
-        if kind == "system" and subtype == "task_started" and event.get("task_id"):
-            task = event["task_id"]
+        kind = event.get("kind")
+        if kind == "job_started" and event.get("job_id"):
+            task = event["job_id"]
             if task in self.ended or task in self.tasks:
                 return False
             self.tasks[task] = event.get("description") or "background job"
-        elif kind == "system" and subtype == "task_notification" and event.get("task_id"):
+        elif kind == "job_finished" and event.get("job_id"):
             if event.get("status") not in {
                 "completed",
                 "failed",
@@ -99,7 +88,7 @@ class Turn:
                 "interrupted",
             }:
                 return False
-            task = event["task_id"]
+            task = event["job_id"]
             if task in self.ended:
                 return False
             self.tasks.pop(task, None)
@@ -110,42 +99,32 @@ class Turn:
             # Codex emits the answer as assistant text, followed by a completion
             # event containing only usage metadata. Keep the answer in that case.
             self.content = str(
-                event.get("result") or self.content or "Agent finished without a text reply."
+                event.get("text") or self.content or "Agent finished without a text reply."
             )
-            self.is_error = bool(event.get("is_error"))
+            self.is_error = bool(event.get("error"))
             self.result_seq = row["seq"]
             self.awaiting_callback = False
             self.phase, self.detail = "waiting" if self.tasks else "working", ""
             self.settled_at = None
             return True
-        elif kind == "assistant":
-            blocks = event.get("message", {}).get("content", [])
+        elif kind == "update":
+            parts = event.get("parts", [])
             changed = False
-            text = [b["text"] for b in blocks if b.get("type") == "text" and b.get("text")]
+            text = [p["text"] for p in parts if p["kind"] == "output"]
             if text:
                 self.content = "\n\n".join(text)
                 changed = True
-            for block in blocks:
-                if block.get("type") == "thinking":
-                    self.phase, self.detail = "thinking", ""
+            for part in parts:
+                if part["kind"] == "activity":
+                    self.phase, self.detail = part["phase"], ""
                     changed = True
-                elif block.get("type") == "tool_use":
-                    args = block.get("input", {})
-                    self.phase = "working"
-                    self.detail = str(
-                        args.get("description") or block.get("name") or "running tool"
-                    )
-                    if block.get("name") == "AskUserQuestion":
-                        self.phase, self.detail = "attention", "answer requested in Conductor"
-                    elif block.get("name") == "ExitPlanMode":
-                        self.phase, self.detail = (
-                            "attention",
-                            "plan approval requested in Conductor",
-                        )
+                elif part["kind"] in {"tool", "question"}:
+                    self.phase = "attention" if part["kind"] == "question" else "working"
+                    self.detail = part["description"]
                     changed = True
             if not changed:
                 return False
-        elif kind == "system" and subtype == "init":
+        elif kind == "started":
             self.phase, self.detail = "starting", ""
         else:
             return False
@@ -156,15 +135,13 @@ class Turn:
         return True
 
     def observe_runtime(self, runtime, now):
-        epoch, live = runtime["incarnation"], runtime["live"]
+        epoch = runtime["instance_id"]
         changed = bool(self.runtime_epoch and self.runtime_epoch != epoch)
         self.runtime_epoch = epoch
-        active = {
-            t.get("taskId", t.get("id", t.get("task_id"))) for t in live.get("backgroundTasks", [])
-        }
+        active = {t["id"] for t in runtime.get("jobs", [])}
         missing = set(self.tasks) - active
         pending = bool(missing or self.awaiting_callback)
-        idle = live.get("status") != "working"
+        idle = runtime.get("activity") != "working"
         if pending and idle:
             if self.runtime_missing_since is None:
                 self.runtime_missing_since = now

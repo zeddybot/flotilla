@@ -54,7 +54,18 @@ class NativeDB(ConductorDB):
                 if live.get("backgroundTasks")
                 else "idle"
             )
-        return {**value, "runtime": runtime}
+        return {
+            **value,
+            "runtime": {
+                "instance_id": runtime["incarnation"],
+                "paused": runtime.get("paused", False),
+                "activity": live.get("status"),
+                "jobs": [
+                    {"id": t.get("taskId", t.get("id", t.get("task_id")))}
+                    for t in live.get("backgroundTasks", [])
+                ],
+            },
+        }
 
     def accepted(self, sid, mid):
         return bool(
@@ -182,7 +193,7 @@ class Conductor:
             time.sleep(0.2)
         raise Unconfirmed("Workspace is still initializing; recovery will reuse it")
 
-    def send(self, wid, sid, prompt, options):
+    def send(self, wid, sid, prompt, options, *, message_id=None):
         self.validate(wid, sid)
         self.transport.bindings[sid] = wid
         config, warning = configuration(options, self.config.model)
@@ -208,7 +219,7 @@ class Conductor:
             current = ConductorDB.session(self.db, sid)
             if current["model"] != config["model"]:
                 warning = f"session model remains {current['model']}; use [new] to change it"
-        mid = identity(sid + ":" + prompt)
+        mid = message_id or identity(sid + ":" + prompt)
         if not self.db.accepted(sid, mid):
             self.transport.call(
                 {

@@ -1,7 +1,5 @@
 """Slack delivery depends on observations, not access to a Conductor SQLite connection."""
 
-import json
-
 import pytest
 
 from slack_conductor.poller import Poller
@@ -63,7 +61,7 @@ def test_final_reply_survives_poller_restart_without_native_sql(tmp_path):
         "id": "result",
         "role": "assistant",
         "turn_id": "turn",
-        "content": json.dumps({"type": "result", "result": "the final answer"}),
+        "event": {"kind": "result", "text": "the final answer", "error": False},
     }
     observations = SessionObservations("idle", [event])
     Poller(store, observations, slack, clock=lambda: 100).tick()
