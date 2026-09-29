@@ -4,8 +4,13 @@ import vm from 'node:vm';
 
 const applied = [], calls = [], commands = [], sent = [], configured = [];
 const watched = [], created = [], selected = [], archived = [];
+const cancelled = [], answered = [], plans = [], approvals = [], opened = [], codexPermissions = [], elicitations = [];
 const acpConfigured = [];
 let intent = {paused: false}, release, block = false, reject = false;
+let currentTurn = 'turn-1', questionRows = [], sessionStatus = 'working';
+const approvalsPending = new Map(), plansPending = new Map();
+const codexPending = new Map(), elicitationPending = new Map();
+const questionsState = {questions: [{question: 'Choose one', options: [{label: 'A'}]}]};
 const composer = {
   state: {state: {sessions: {s: {paused: false}}}},
   watchSession: async args => {watched.push(args); return {cancel() {}};}, refresh: async () => {},
@@ -23,17 +28,29 @@ const testExports = {
     archiveWorkspace(args) {archived.push(args); return true;},
     dependencies: {repo: {getRepos: async () => []}}
   },
-  session: {getSession: async sid => ({localWorkspaceId: sid === 'foreign' ? 'elsewhere' : 'w'}),
+  session: {getSession: async sid => ({localWorkspaceId: sid === 'foreign' ? 'elsewhere' : 'w', status: sessionStatus, agentType: 'claude'}),
+    getCurrentMessageTurnId: async () => currentTurn,
+    getToolApproval: id => id === 'approval-1' ? {toolName: 'Bash'} : undefined,
+    dependencies: {db: {select: async () => questionRows}},
+    store: {getState: () => ({state: {cloudStateBySessionId: {s: {questions: questionsState}}}})},
     setSessionAgentAndModel(args) { acpConfigured.push(args); return args.model !== 'unavailable'; },
     updateSessionModelConfiguration(args) { configured.push(args); return true; }},
   composer,
-  sidecar: {getSessionStatus: async () => ({status: 'idle'}), query() {}, resolveToolApproval() {}}
+  sidecar: {getSessionStatus: async () => ({status: 'idle'}), query() {},
+    pendingToolApprovals: approvalsPending, pendingExitPlanModeApprovals: plansPending,
+    pendingCodexPermissionApprovals: codexPending, pendingCodexMcpElicitations: elicitationPending,
+    async resolveToolApproval(args) {approvals.push(args); approvalsPending.delete(args.toolUseId);},
+    async resolveCodexPermissionApproval(args) {codexPermissions.push(args); codexPending.delete(args.sessionId);},
+    async resolveCodexMcpElicitation(args) {elicitations.push(args); elicitationPending.delete(args.sessionId);}},
+  control: {getInitOptions() {}, async cancelSession(args) {cancelled.push(args);},
+    async sendAskUserQuestionResponse(...args) {answered.push(args);},
+    async resolveExitPlanMode(args) {plans.push(args); plansPending.delete(args.sessionId);}}
 };
 const timers = new Set();
 const context = {
   testExports, console, crypto: {randomUUID: () => String(Math.random())},
   document: {scripts: [{type: 'module', src: '/assets/index-test.js'}]},
-  window: {}, AbortSignal, setTimeout, clearTimeout,
+  window: {__TAURI_INTERNALS__: {invoke: async (...args) => {opened.push(args);}}}, AbortSignal, setTimeout, clearTimeout,
   setInterval: (fn, ms) => {const id = setInterval(fn, ms); timers.add(id); return id;},
   clearInterval,
   fetch: async (url, args) => {
@@ -114,6 +131,61 @@ try {
   const invalid = await dispatch('foreign', {op: 'send', wid: 'w', sid: 'foreign', message_id: 'bad', mode: 'steer', prompt: 'wrong session'});
   assert.match(invalid.error, /target changed/);
   assert.equal(sent.length, before);
+  assert.equal((await dispatch('reveal', {op: 'reveal', wid: 'w', sid: 's'})).value.url,
+    'conductor://workspace?id=w&session=s');
+  assert.equal(opened.length, 0);
+  assert.equal((await dispatch('stale-stop', {op: 'interrupt', wid: 'w', sid: 's', turn_id: 'old'})).value.state, 'stale');
+  assert.equal(cancelled.length, 0);
+  assert.equal((await dispatch('stop', {op: 'interrupt', wid: 'w', sid: 's', turn_id: 'turn-1'})).value.state, 'requested');
+  assert.deepEqual(JSON.parse(JSON.stringify(cancelled[0])), {sessionId: 's', turnId: 'turn-1'});
+  assert.equal(intent.paused, true);
+  approvalsPending.set('approval-1', {sessionId: 's'});
+  const approvalList = (await dispatch('list-approval', {op: 'questions', wid: 'w', sid: 's'})).value;
+  assert.equal(approvalList[0].question_id, 'approval-1');
+  assert.equal(approvalList[0].prompt, 'Approve Bash tool use');
+  assert.equal((await dispatch('approval', {op: 'respond', wid: 'w', sid: 's', question_id: 'approval-1',
+    response: {kind: 'approval', decision: 'allow'}})).value.state, 'answered');
+  assert.equal(approvals[0].toolUseId, 'approval-1');
+  assert.match((await dispatch('stale-approval', {op: 'respond', wid: 'w', sid: 's', question_id: 'approval-1',
+    response: {kind: 'approval', decision: 'deny'}})).error, /no longer pending/);
+  questionRows = [{content: JSON.stringify({type: 'assistant', message: {content: [
+    {type: 'tool_use', name: 'AskUserQuestion', id: 'question-1'}]}})}];
+  sessionStatus = 'needs_user_input';
+  assert.equal((await dispatch('list-question', {op: 'questions', wid: 'w', sid: 's'})).value[0].question_id,
+    'question-1');
+  assert.match((await dispatch('stale-question', {op: 'respond', wid: 'w', sid: 's', question_id: 'old',
+    response: {kind: 'question', answers: ['A']}})).error, /question changed/);
+  assert.equal((await dispatch('question', {op: 'respond', wid: 'w', sid: 's', question_id: 'question-1',
+    response: {kind: 'question', answers: ['A']}})).value.state, 'answered');
+  assert.equal(answered[0][0], 's');
+  assert.deepEqual(JSON.parse(JSON.stringify(answered[0][1])), ['A']);
+  questionRows = [{content: JSON.stringify({type: 'assistant', message: {content: [
+    {type: 'tool_use', name: 'ExitPlanMode', id: 'plan-1'}]}})}];
+  sessionStatus = 'needs_plan_response'; plansPending.set('s', {});
+  assert.equal((await dispatch('list-plan', {op: 'questions', wid: 'w', sid: 's'})).value[0].question_id,
+    'plan-1');
+  assert.equal((await dispatch('plan', {op: 'respond', wid: 'w', sid: 's', question_id: 'plan-1',
+    response: {kind: 'plan', approved: false}})).value.state, 'answered');
+  assert.equal(plans[0].approved, false);
+  codexPending.set('s', {interactionId: 'codex-1'});
+  assert.equal((await dispatch('list-codex', {op: 'questions', wid: 'w', sid: 's'})).value[0].question_id,
+    'codex-1');
+  assert.match((await dispatch('stale-codex', {op: 'respond', wid: 'w', sid: 's', question_id: 'old',
+    response: {kind: 'codex_permission', action: 'decline'}})).error, /interaction changed/);
+  assert.equal((await dispatch('codex', {op: 'respond', wid: 'w', sid: 's', question_id: 'codex-1',
+    response: {kind: 'codex_permission', action: 'grant', scope: 'turn',
+      granted_permissions: {filesystem: {read: ['/tmp']}}}})).value.state, 'answered');
+  assert.deepEqual(JSON.parse(JSON.stringify(codexPermissions[0].response)), {
+    action: 'grant', scope: 'turn', grantedPermissions: {filesystem: {read: ['/tmp']}}
+  });
+  elicitationPending.set('s', {interactionId: 'mcp-1'});
+  assert.equal((await dispatch('list-mcp', {op: 'questions', wid: 'w', sid: 's'})).value[0].question_id,
+    'mcp-1');
+  assert.equal((await dispatch('mcp', {op: 'respond', wid: 'w', sid: 's', question_id: 'mcp-1',
+    response: {kind: 'mcp_elicitation', action: 'accept', content: {name: 'example'}}})).value.state, 'answered');
+  assert.deepEqual(JSON.parse(JSON.stringify(elicitations[0].response)), {
+    action: 'accept', content: {name: 'example'}
+  });
   await until(() => context.window.__flotilla.sessions.s);
   assert.equal(context.window.__flotilla.sessions.s.paused, false);
   assert.equal(context.window.__flotilla.sessions.foreign, undefined);
@@ -129,7 +201,7 @@ try {
   assert.equal(sent.at(-1).sessionId, 'desktop');
   reject = true;
   await assert.rejects(composer.setPaused({sessionId: 's', paused: false}), /attachment disconnected/);
-  assert.deepEqual(applied, [true, true]);
+  assert.deepEqual(applied, [true, true, true]);
   const retired = context.window.__flotilla;
   commands.push({id: 'shutdown', body: {op: 'detach'}});
   await until(() => calls.some(c => c.route === 'result' && c.body.id === 'shutdown'));

@@ -16,6 +16,7 @@
   const session = service('getSession', 'updateSessionModelConfiguration', 'setSessionAgentAndModel');
   const composer = service('watchSession', 'sendMessage', 'getDraftAttachments');
   const sidecar = service('getSessionStatus', 'query', 'resolveToolApproval');
+  const control = service('getInitOptions', 'cancelSession', 'sendAskUserQuestionResponse');
   // Probe initialized services, not just exported method names.
   await workspace.getWorkspaces();
   await workspace.dependencies.repo.getRepos();
@@ -86,6 +87,23 @@
       throw error;
     }
   };
+  const latestQuestion = async sid => {
+    const rows = await session.dependencies.db.select(
+      "SELECT content FROM session_messages WHERE session_id = ? AND role = 'assistant' ORDER BY rowid DESC LIMIT 100",
+      [sid]
+    );
+    for (const row of rows) {
+      let value;
+      try { value = JSON.parse(row.content); } catch { continue; }
+      if (value?.type !== 'assistant' || value.parent_tool_use_id) continue;
+      for (const block of [...(value.message?.content || [])].reverse()) {
+        if (block?.type === 'tool_use' && ['AskUserQuestion', 'ExitPlanMode'].includes(block.name)) {
+          return {id: block.id, name: block.name};
+        }
+      }
+    }
+    return null;
+  };
   async function execute(c) {
     if (c.op === 'detach') { p.detach(); return true; }
     if (c.op === 'repos') return workspace.dependencies.repo.getRepos();
@@ -129,6 +147,91 @@
         localWorkspaceId: c.wid, sessionId: c.sid, messageId: c.message_id,
         mode: c.mode, message: c.prompt, attachmentIds: []
       });
+    });
+    if (c.op === 'reveal') return serial(c.sid, async () => {
+      const url = 'conductor://workspace?id=' + encodeURIComponent(c.wid) +
+        '&session=' + encodeURIComponent(c.sid);
+      return {url};
+    });
+    if (c.op === 'questions') return serial(c.sid, async () => {
+      const state = await session.getSession(c.sid);
+      const pending = [];
+      for (const [id, approval] of sidecar.pendingToolApprovals || []) {
+        if (approval.sessionId !== c.sid) continue;
+        const tool = session.getToolApproval(id);
+        pending.push({question_id: id, kind: 'approval',
+          prompt: tool?.toolName ? 'Approve ' + tool.toolName + ' tool use' : 'Approve tool use',
+          choices: ['allow', 'deny']});
+      }
+      const codex = sidecar.pendingCodexPermissionApprovals?.get(c.sid);
+      if (codex) pending.push({question_id: codex.interactionId, kind: 'codex_permission',
+        prompt: 'Review Codex MCP permissions in Conductor', choices: ['grant', 'decline']});
+      const mcp = sidecar.pendingCodexMcpElicitations?.get(c.sid);
+      if (mcp) pending.push({question_id: mcp.interactionId, kind: 'mcp_elicitation',
+        prompt: 'Complete MCP request in Conductor', choices: ['accept', 'decline']});
+      if (state.status === 'needs_user_input' || state.status === 'needs_plan_response') {
+        const latest = await latestQuestion(c.sid);
+        if (latest?.name === 'AskUserQuestion') {
+          const questions = session.store.getState().state.cloudStateBySessionId[c.sid]?.questions?.questions;
+          if (Array.isArray(questions) && questions.length) pending.push({question_id: latest.id,
+            kind: 'question', prompt: questions.map(q => q.question).join(' / '), questions});
+        } else if (latest?.name === 'ExitPlanMode' && sidecar.pendingExitPlanModeApprovals?.has(c.sid)) {
+          pending.push({question_id: latest.id, kind: 'plan', prompt: 'Review the plan in Conductor',
+            choices: ['approve', 'reject']});
+        }
+      }
+      return pending;
+    });
+    if (c.op === 'interrupt') return serial(c.sid, async () => {
+      const current = await session.getCurrentMessageTurnId({sessionId: c.sid});
+      if (!current || current !== c.turn_id) return {state: 'stale'};
+      await record(c.sid, true, 'interrupt:' + c.turn_id);
+      await lease();
+      await originalPause.call(composer, {sessionId: c.sid, paused: true});
+      const before = await session.getCurrentMessageTurnId({sessionId: c.sid});
+      if (before !== c.turn_id) return {state: 'stale'};
+      await control.cancelSession({sessionId: c.sid, turnId: c.turn_id});
+      return {state: 'requested', turn_id: c.turn_id};
+    });
+    if (c.op === 'respond') return serial(c.sid, async () => {
+      const {question_id: id, response} = c;
+      if (response.kind === 'codex_permission' || response.kind === 'mcp_elicitation') {
+        const permission = response.kind === 'codex_permission';
+        const pending = permission ? sidecar.pendingCodexPermissionApprovals?.get(c.sid) :
+          sidecar.pendingCodexMcpElicitations?.get(c.sid);
+        if (!pending || pending.interactionId !== id) throw Error('Conductor interaction changed');
+        const answer = permission ? response.action === 'grant' ? {
+          action: 'grant', scope: response.scope, grantedPermissions: response.granted_permissions
+        } : {action: 'decline'} : response.action === 'accept' ? {
+          action: 'accept', ...(response.content === undefined ? {} : {content: response.content})
+        } : {action: 'decline'};
+        if (permission) await sidecar.resolveCodexPermissionApproval({sessionId: c.sid, response: answer});
+        else await sidecar.resolveCodexMcpElicitation({sessionId: c.sid, response: answer});
+        return {state: 'answered', question_id: id};
+      }
+      if (response.kind === 'approval') {
+        const pending = sidecar.pendingToolApprovals?.get(id);
+        if (!pending || pending.sessionId !== c.sid) throw Error('Conductor approval is no longer pending for this session');
+        await sidecar.resolveToolApproval({toolUseId: id, decision: response.decision});
+        return {state: 'answered', question_id: id};
+      }
+      const latest = await latestQuestion(c.sid);
+      const expected = response.kind === 'plan' ? 'ExitPlanMode' : 'AskUserQuestion';
+      if (latest?.id !== id || latest.name !== expected) throw Error('Conductor question changed');
+      const current = await session.getSession(c.sid);
+      const status = response.kind === 'plan' ? 'needs_plan_response' : 'needs_user_input';
+      if (current.status !== status) throw Error('Conductor question is no longer pending');
+      if (response.kind === 'plan') {
+        if (!sidecar.pendingExitPlanModeApprovals?.has(c.sid)) throw Error('Conductor plan is no longer pending');
+        await control.resolveExitPlanMode({sessionId: c.sid, approved: response.approved,
+          feedback: response.feedback, isCodexSession: current.agentType === 'codex'});
+      } else {
+        const questions = session.store.getState().state.cloudStateBySessionId[c.sid]?.questions?.questions;
+        if (!Array.isArray(questions) || !questions.length) throw Error('Conductor question is unavailable');
+        if (response.answers.length !== questions.length) throw Error('Conductor answer count changed');
+        await control.sendAskUserQuestionResponse(c.sid, response.answers, questions);
+      }
+      return {state: 'answered', question_id: id};
     });
     throw Error('Unsupported Conductor bridge operation');
   }
