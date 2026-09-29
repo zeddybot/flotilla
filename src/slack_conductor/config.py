@@ -11,6 +11,13 @@ from dotenv import load_dotenv
 @dataclass
 class Config:
     mode: str = "client"
+    runtime_adapter: str = "conductor"
+    engine: str = "claude"
+    claude_binary: str = "claude"
+    codex_binary: str = "codex"
+    engine_model: str = ""
+    engine_effort: str = ""
+    engine_permission_policy: str = "read-only"
     server_url: str = ""
     server_host: str = "127.0.0.1"
     server_port: int = 8765
@@ -52,6 +59,12 @@ class Config:
             raise ValueError("send_mode must be queue or steer")
         if cfg.mode not in {"server", "client"}:
             raise ValueError("mode must be server or client")
+        if cfg.runtime_adapter not in {"conductor", "headless"}:
+            raise ValueError("runtime_adapter must be conductor or headless")
+        if cfg.engine not in {"claude", "codex"}:
+            raise ValueError("engine must be claude or codex")
+        if cfg.engine_permission_policy not in {"read-only", "workspace-write"}:
+            raise ValueError("engine_permission_policy must be read-only or workspace-write")
         if not 1 <= cfg.server_port <= 65535:
             raise ValueError("server_port must be between 1 and 65535")
         if not cfg.client_id:
