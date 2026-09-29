@@ -41,7 +41,7 @@ def test_daemon_shutdown_deadline_and_durable_events(tmp_path, scenario):
                 time.sleep(0.4)
 
         service.run = run
-        service.daemon(state, SimpleNamespace(state_dir=state), None)
+        service.server(state, SimpleNamespace(state_dir=state), None)
     """)
     result = subprocess.run(
         [sys.executable, "-c", script, str(tmp_path), scenario],

@@ -46,9 +46,10 @@ def test_server_only_needs_private_token(tmp_path):
         remote_credentials(config)
 
 
-def test_mode_validation_precedes_state_creation(tmp_path):
+@pytest.mark.parametrize("mode", ["invalid", "local"])
+def test_mode_validation_precedes_state_creation(tmp_path, mode):
     (tmp_path / "config.toml").write_text(
-        f'mode = "invalid"\nstate_dir = {json.dumps(str(tmp_path / "state"))}\n'
+        f'mode = "{mode}"\nstate_dir = {json.dumps(str(tmp_path / "state"))}\n'
     )
     with pytest.raises(ValueError, match="mode"):
         Config.load(tmp_path)

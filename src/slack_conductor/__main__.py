@@ -9,11 +9,10 @@ from .config import Config, remote_credentials
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Slack bridge to local Conductor")
+    parser = argparse.ArgumentParser(description="Conductor Slack server and Mac client")
     parser.add_argument("--root", type=Path, default=Path.cwd())
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor")
-    sub.add_parser("daemon")
     sub.add_parser("server")
     sub.add_parser("client")
     new = sub.add_parser("new")
@@ -36,9 +35,9 @@ def main():
         token = remote_credentials(config)
         if args.command == "server":
             from .remote import RemoteConductor
-            from .service import daemon
+            from .service import server
 
-            daemon(args.root, config, RemoteConductor(config, token))
+            server(args.root, config, RemoteConductor(config, token))
         else:
             from .service import client
 
@@ -59,20 +58,18 @@ def main():
         if not ready:
             raise RuntimeError("Remote Mac client is not ready")
         return
+    if config.mode != "client":
+        parser.error(f"{args.command} requires the Mac client configuration")
     from .conductor.native import Conductor
 
-    conductor = Conductor(config, client=args.command != "daemon")
+    conductor = Conductor(config, client=True)
     options = {
         "model": config.model,
         "effort": config.effort,
         "fast": False,
         "send_mode": getattr(args, "send_mode", None) or config.send_mode,
     }
-    if args.command == "daemon":
-        from .service import daemon
-
-        daemon(args.root, config, conductor)
-    elif args.command == "doctor":
+    if args.command == "doctor":
         conductor.db.query("SELECT id FROM repos LIMIT 1")
         attached = conductor.transport.online()
         print(
@@ -80,7 +77,7 @@ def main():
         )
         status_file = config.state_dir / "remote-status.json"
         connected = True
-        if config.mode == "client" and not status_file.exists():
+        if not status_file.exists():
             connected = False
             print("Remote link: no status")
         elif status_file.exists():
@@ -91,7 +88,7 @@ def main():
             print(f"Remote link: {link}; client: {status.get('client_id', 'unknown')}")
         if not attached:
             raise RuntimeError("Native attachment is not ready; check daemon.log")
-        if config.mode == "client" and not connected:
+        if not connected:
             raise RuntimeError("Remote server link is not connected; check daemon.log")
     elif args.command == "new":
         if args.repo.resolve() != config.repo.resolve():

@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 @dataclass
 class Config:
-    mode: str = "local"
+    mode: str = "client"
     server_url: str = ""
     server_host: str = "127.0.0.1"
     server_port: int = 8765
@@ -50,8 +50,8 @@ class Config:
         cfg = cls(**data)
         if cfg.send_mode not in {"queue", "steer"}:
             raise ValueError("send_mode must be queue or steer")
-        if cfg.mode not in {"local", "server", "client"}:
-            raise ValueError("mode must be local, server, or client")
+        if cfg.mode not in {"server", "client"}:
+            raise ValueError("mode must be server or client")
         if not 1 <= cfg.server_port <= 65535:
             raise ValueError("server_port must be between 1 and 65535")
         if not cfg.client_id:
