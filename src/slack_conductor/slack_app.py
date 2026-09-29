@@ -24,6 +24,8 @@ class Bridge:
         self.bot_id, self.owner_id, self.team_id = bot_id, owner_id, team_id
         self.notifications = Notifications(store, slack, owner_id)
         self.poller = Poller(store, conductor.db, slack, notifications=self.notifications)
+        if hasattr(conductor, "make_uploads"):
+            self.poller.uploads = conductor.make_uploads(store, slack, self.poller.clock)
 
     def addressed(self, event):
         return (
@@ -312,7 +314,11 @@ def run(config, store, conductor, creds, stop):
                 online = conductor.ready()
                 # Replies cannot be delivered while Slack is away; keep events queued.
                 if connected:
-                    envelope = store.next_event() if online else None
+                    envelope = (
+                        store.next_event()
+                        if online or getattr(conductor, "allow_offline", False)
+                        else None
+                    )
                     if envelope:
                         bridge.process(envelope)
                     bridge.poller.tick()
