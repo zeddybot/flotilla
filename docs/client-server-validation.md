@@ -19,7 +19,7 @@ not committed.
 | Daytona Linux, Python 3.12.14 | 254 passed; Ruff check and format passed. Final source matches the workspace across 76 code, test, and lockfile paths. |
 | Daytona Linux, Python 3.14.7 | 254 passed; Ruff check and format passed. |
 | Focused Mac checks | Remote file failures/transport, state migration, and supervisor tests passed. No full suite was run locally. |
-| GitHub Actions | Blocked: current jobs never started because account payments failed or the spending limit was reached. This is not a passing required-CI gate. |
+| GitHub Actions | Hosted jobs never started because account payments failed or the spending limit was reached. Local validation is the authorized merge path; the proposed ruleset is not active. |
 | PR feedback | No actionable inline, review-body, or issue feedback across PRs 59–67 at the final audit. |
 
 Automated coverage includes owner/mention admission, duplicate commands,
@@ -71,6 +71,15 @@ messages never received during a Slack outage have no automatic history
 backfill; lost plan-approval callbacks are not reconstructed. Slack and SQLite
 cannot provide an atomic exactly-once commit.
 
-The code is deployed but the stack remains unmerged pending GitHub's required
-CI gate. Passing the cloud tests and the live checks does not establish zero
-possible regressions.
+GitHub's hosted jobs did not start because of account billing. The repository's
+proposed CI ruleset is not active, and Graphite's merge dry run reported the stack
+eligible. The full local macOS/Python 3.12 run subsequently passed all 254 tests,
+as did lint and formatting. Merge was authorized using local validation while
+hosted CI is unavailable. Passing these checks does not establish zero possible
+regressions.
+
+The subsequent server/client-only change removes `mode = "local"`, `sc daemon`,
+the installer's mode selector, and the legacy local-rollback export flag. Its
+full macOS/Python 3.12 run passed 260 tests, including remote transport and
+offline/reconnect behavior; Ruff lint/format passed. Validation and release
+evidence are kept in the private deployment directory.

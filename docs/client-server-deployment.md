@@ -77,8 +77,9 @@ expires within 24 hours, so it is unsuitable as an unattended permanent URL.
 
 ## State cutover
 
-Stop the Mac daemon before export and leave it stopped until the server is
-ready. The exporter refuses an active `daemon.lock` and captures a consistent
+The initial cutover from the retired all-in-one release stopped its Mac daemon
+before export. For subsequent server moves or restores, put the current server
+on `HOLD` before exporting. The exporter refuses an active `daemon.lock` and captures a consistent
 SQLite backup. It includes thread bindings, pending events/statuses,
 notifications, remote receipts when present, and referenced upload snapshots.
 It excludes `native.sqlite`, native attachment files, and Conductor's database.
@@ -101,23 +102,27 @@ old databases and uploads move to `/data/state/migration-previous`. Keep the
 original Mac state and archive until validation is complete.
 
 After import, provision config and release `HOLD` to start the server, then
-start the Mac client.
+install/start the Mac client with `uv run python scripts/install_service.py`.
 Check server health and the authenticated WebSocket, old-thread follow-up,
 new-thread creation, queue and steer, notifications, file uploads (including
 restart mid-upload), and recovery after client disconnect, server process
 restart, and sandbox stop/start. A green health response alone does not prove
 Slack or Conductor parity.
 
-For rollback, drain any in-progress remote file download first. A server
-export with `--for-local` refuses an incomplete remote file plan; `.part`
-files can safely restart downloading on the server but cannot resume in the
-local Mac upload path. Stop the Mac client and put the server on `HOLD`. Export
-the server state using `--for-local`, transfer the archive to the Mac, and import it into the
-Mac state directory with `--replace`. The importer preserves the Mac's
-`native.sqlite` and other local Conductor files. Start the local daemon only
-after the remote server has stopped, so there is never a second Socket Mode
-consumer. If the server never accepted any Slack work, the original Mac state
-may be restored instead; otherwise the server export is authoritative.
+Rollback now means deploying a previous compatible server/client release.
+There is no local mode or `--for-local` export option. Keep the server's current
+delivery state authoritative; never replace it with the stale pre-cutover Mac
+database after the server has accepted work. Put the server on `HOLD`, export a
+backup, deploy the compatible server code, and reinstall the matching Mac client.
+Release `HOLD` and verify health and a Slack round trip. Restore an older state
+archive only as an explicit data-recovery action, because it can discard newer work.
+
+For a server-host move, transfer the export and import it into the replacement
+state directory while both servers are stopped. Completed snapshots are omitted;
+unfinished Slack uploads retain their saved snapshots and file IDs. Partial
+Mac-to-server downloads restart from the Mac's durable snapshot after a restore.
+The migration archive does not contain Mac-native state or credentials. Preserve
+the Mac client state and provision the replacement server credentials separately.
 
 Daytona container filesystems survive stop/start, but processes do not. Disable
 auto-stop and TTL as above, keep SQLite on local disk, and take regular
