@@ -3,6 +3,7 @@
 import json
 import sqlite3
 import time
+from contextlib import closing
 from pathlib import Path
 
 from ..remote_journal import Receipts
@@ -28,7 +29,7 @@ class ConductorRuntime:
         # Import existing bindings without rewriting server-owned thread identities.
         remote = config.state_dir / "remote.sqlite"
         if remote.exists():
-            with sqlite3.connect(f"file:{remote}?mode=ro", uri=True) as c:
+            with closing(sqlite3.connect(f"file:{remote}?mode=ro", uri=True)) as c:
                 self.receipts.bind(dict(c.execute("SELECT session_id,workspace_id FROM bindings")))
 
     def start(self, bindings):

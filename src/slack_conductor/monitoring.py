@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import tempfile
 import time
+from contextlib import closing
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
@@ -25,7 +26,7 @@ def _read_db(path, queries):
         return None
     uri = path.resolve().as_uri() + "?mode=ro"
     try:
-        with sqlite3.connect(uri, uri=True, timeout=1) as conn:
+        with closing(sqlite3.connect(uri, uri=True, timeout=1)) as conn:
             conn.execute("PRAGMA query_only=ON")
             return [conn.execute(sql).fetchone() for sql in queries]
     except (sqlite3.DatabaseError, OSError):
@@ -43,7 +44,9 @@ def _pending_ids(state_dir):
         if not path.is_file():
             continue
         try:
-            with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1) as conn:
+            with closing(
+                sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)
+            ) as conn:
                 conn.execute("PRAGMA query_only=ON")
                 for (identity,) in conn.execute(
                     f"SELECT id FROM {table} WHERE {where} ORDER BY id LIMIT 256"

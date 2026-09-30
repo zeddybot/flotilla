@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import time
+from contextlib import closing
 
 from slack_conductor.config import Config
 from slack_conductor.monitoring import Monitor, report
@@ -19,7 +20,7 @@ def test_missing_server_databases_are_unknown_and_not_created(tmp_path):
 def test_old_active_turn_is_informational(tmp_path):
     state = tmp_path / "state"
     state.mkdir()
-    with sqlite3.connect(state / "bridge.sqlite") as db:
+    with closing(sqlite3.connect(state / "bridge.sqlite")) as db, db:
         db.executescript(
             "CREATE TABLE events(state TEXT, created REAL);"
             "CREATE TABLE statuses(id INTEGER, state TEXT, created REAL);"
@@ -27,7 +28,7 @@ def test_old_active_turn_is_informational(tmp_path):
             "CREATE TABLE remote_asset_cleanup(attempts INTEGER);"
         )
         db.execute("INSERT INTO statuses VALUES (1, 'active', ?)", (time.time() - 86400,))
-    with sqlite3.connect(state / "remote.sqlite") as db:
+    with closing(sqlite3.connect(state / "remote.sqlite")) as db, db:
         db.execute("CREATE TABLE calls(response TEXT)")
     snapshot = report(Config(mode="server", state_dir=state), runtime_ready=True, slack_ready=True)
     assert snapshot["checks"]["active_work"]["state"] == "ok"
@@ -38,7 +39,7 @@ def test_old_active_turn_is_informational(tmp_path):
 def test_one_stalled_receipt_and_delivery_warn_then_recover(tmp_path, monkeypatch):
     state = tmp_path / "state"
     state.mkdir()
-    with sqlite3.connect(state / "bridge.sqlite") as db:
+    with closing(sqlite3.connect(state / "bridge.sqlite")) as db, db:
         db.executescript(
             "CREATE TABLE events(state TEXT, created REAL);"
             "CREATE TABLE statuses(id INTEGER, state TEXT, created REAL);"
@@ -47,7 +48,7 @@ def test_one_stalled_receipt_and_delivery_warn_then_recover(tmp_path, monkeypatc
         )
         db.execute("INSERT INTO statuses VALUES (1, 'delivering', 1)")
         db.execute("INSERT INTO statuses VALUES (2, 'active', 1)")
-    with sqlite3.connect(state / "remote.sqlite") as db:
+    with closing(sqlite3.connect(state / "remote.sqlite")) as db, db:
         db.execute("CREATE TABLE calls(id TEXT, response TEXT)")
         db.execute("INSERT INTO calls VALUES ('private-receipt-id', NULL)")
     clock = [time.time()]
@@ -68,9 +69,9 @@ def test_one_stalled_receipt_and_delivery_warn_then_recover(tmp_path, monkeypatc
     assert {i["check"] for i in warning["incidents"]} == {"receipts", "delivery"}
     assert "private-receipt-id" not in (state / "monitoring.log").read_text()
 
-    with sqlite3.connect(state / "bridge.sqlite") as db:
+    with closing(sqlite3.connect(state / "bridge.sqlite")) as db, db:
         db.execute("UPDATE statuses SET state='active' WHERE id=1")
-    with sqlite3.connect(state / "remote.sqlite") as db:
+    with closing(sqlite3.connect(state / "remote.sqlite")) as db, db:
         db.execute("UPDATE calls SET response='{}'")
     recovered = monitor.check(report(config, runtime_ready=True, slack_ready=True))
     assert {i["check"] for i in recovered["incidents"]} == {"receipts", "delivery"}
@@ -81,7 +82,7 @@ def test_one_stalled_receipt_and_delivery_warn_then_recover(tmp_path, monkeypatc
 def test_new_receipt_does_not_inherit_previous_receipt_age(tmp_path, monkeypatch):
     state = tmp_path / "state"
     state.mkdir()
-    with sqlite3.connect(state / "remote.sqlite") as db:
+    with closing(sqlite3.connect(state / "remote.sqlite")) as db, db:
         db.execute("CREATE TABLE calls(id TEXT PRIMARY KEY, response TEXT)")
         db.execute("INSERT INTO calls VALUES ('first', NULL)")
     clock = [time.time()]
@@ -90,7 +91,7 @@ def test_new_receipt_does_not_inherit_previous_receipt_age(tmp_path, monkeypatch
     monitor = Monitor(config)
     monitor.check(report(config, runtime_ready=True, slack_ready=True))
     clock[0] += 601
-    with sqlite3.connect(state / "remote.sqlite") as db:
+    with closing(sqlite3.connect(state / "remote.sqlite")) as db, db:
         db.execute("UPDATE calls SET response='{}' WHERE id='first'")
         db.execute("INSERT INTO calls VALUES ('second', NULL)")
     fresh = report(config, runtime_ready=True, slack_ready=True)
