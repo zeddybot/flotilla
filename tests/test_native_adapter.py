@@ -1,3 +1,4 @@
+import itertools
 import sqlite3
 from contextlib import closing
 from types import SimpleNamespace
@@ -191,6 +192,38 @@ def test_recovered_creation_uses_original_workspace_and_session(tmp_path):
     assert first == second
     assert created == [identity("workspace:slack:event")]
     assert second["active_session_id"] == "created"
+
+
+@pytest.mark.parametrize(
+    "returned_workspace",
+    [{"id": {"localId": "w", "serverId": "remote-w"}}, {"localId": "w", "id": "remote-w"}],
+)
+def test_creation_recovers_returned_identity_from_durable_receipt(
+    tmp_path, monkeypatch, returned_workspace
+):
+    adapter, _ = fixture(tmp_path)
+    monkeypatch.setattr("slack_conductor.conductor.native.time.sleep", lambda _: None)
+    monkeypatch.setattr(
+        "slack_conductor.conductor.native.time.monotonic", itertools.count().__next__
+    )
+    journal = adapter.transport.journal
+    creations = []
+
+    def call(body, *, key):
+        journal.enqueue(key, body)
+        command = journal.claim("generation")
+        if command:
+            assert body["op"] == "create"
+            creations.append(body["wid"])
+            journal.complete(key, "generation", {"value": {"workspace": returned_workspace}})
+        return journal.wait(key)
+
+    adapter.transport.call = call
+    first = adapter.new_workspace("saved-event")
+    second = adapter.new_workspace("saved-event")
+    assert first == second
+    assert first["id"] == "w" and first["active_session_id"] == "s"
+    assert creations == [identity("workspace:saved-event")]
 
 
 @pytest.mark.parametrize(

@@ -217,3 +217,119 @@ try {
   context.window.__flotilla?.detach();
   for (const timer of timers) clearInterval(timer);
 }
+
+// Modern Conductor requires its own identity class, including prototype getters.
+for (const emptyInventory of [false, true]) {
+  class WorkspaceId {
+    static ids = new Map();
+    static fromLocalId(localId) {
+      if (!this.ids.has(localId)) this.ids.set(localId, new this(localId));
+      return this.ids.get(localId);
+    }
+    constructor(localId) { this.localId = localId; }
+    get serverId() { return 'server-' + this.localId; }
+  }
+  const workspaces = new Map();
+  if (!emptyInventory) workspaces.set('w', {id: WorkspaceId.fromLocalId('w'), state: 'ready'});
+  const requests = [], results = [], mutations = [], lookups = [], modernTimers = new Set();
+  const target = args => {
+    assert.ok(args.workspaceId instanceof WorkspaceId);
+    assert.equal(args.workspaceId, WorkspaceId.fromLocalId(args.workspaceId.localId));
+    assert.equal(args.workspaceId.serverId, 'server-' + args.workspaceId.localId);
+    assert.equal(args.localWorkspaceId, undefined);
+  };
+  const modernComposer = {
+    state: {state: {sessions: {}}}, getDraftAttachments() {},
+    async watchSession(args) { target(args); mutations.push(['watch', args]); return {cancel() {}}; },
+    async refresh() {}, async setPaused() {},
+    async sendMessage(args) { target(args); mutations.push(['send', args]); return {ok: true}; }
+  };
+  const modernExports = {
+    workspace: {
+      async getWorkspaces() { return [...workspaces.values()]; },
+      async getWorkspace(id) {
+        assert.ok(id instanceof WorkspaceId);
+        assert.equal(id, WorkspaceId.fromLocalId(id.localId));
+        lookups.push(id.localId);
+        return id.localId === 'wrong-workspace' ? workspaces.get('w') : workspaces.get(id.localId);
+      },
+      async createWorkspaceWithSetup(args) {
+        // An empty installation cannot discover the class until create returns it.
+        if (emptyInventory && !mutations.length) assert.equal(args.localWorkspaceId, 'requested');
+        else target(args);
+        mutations.push(['create', args]);
+        const id = args.workspaceId ?? WorkspaceId.fromLocalId('w');
+        const w = {id, state: 'ready'};
+        workspaces.set(id.localId, w);
+        return {workspace: w};
+      },
+      async setActiveSessionId(args) { target(args); mutations.push(['select', args]); return true; },
+      async archiveWorkspace(args) { target(args); mutations.push(['archive', args]); return true; },
+      dependencies: {repo: {getRepos: async () => []}}
+    },
+    session: {
+      async getSession(sid) {
+        return {workspaceId: WorkspaceId.fromLocalId(sid === 'foreign' ? 'elsewhere' :
+          sid === 'wrong-workspace-session' ? 'wrong-workspace' : 'w'), status: 'idle'};
+      },
+      async updateSessionModelConfiguration() {}, async setSessionAgentAndModel() {}
+    },
+    composer: modernComposer,
+    sidecar: {async getSessionStatus() {return {status: 'idle'};}, query() {}, resolveToolApproval() {}},
+    control: {getInitOptions() {}, cancelSession() {}, sendAskUserQuestionResponse() {}}
+  };
+  const modernContext = {
+    testExports: modernExports, console, crypto: context.crypto, document: context.document,
+    window: {}, AbortSignal, setTimeout, clearTimeout, clearInterval,
+    setInterval(fn, ms) { const id = setInterval(fn, ms); modernTimers.add(id); return id; },
+    async fetch(url, args) {
+      const route = url.split('/token/')[1].split('?')[0];
+      const body = args?.body ? JSON.parse(args.body) : null;
+      if (route === 'result') results.push(body);
+      return {ok: true, json: async () => route === 'next' ? requests.shift() ?? null :
+        route === 'pause' ? {paused: false} : true};
+    }
+  };
+  let commandId = 0;
+  const dispatchModern = async body => {
+    const id = String(++commandId);
+    requests.push({id, body});
+    await until(() => results.some(result => result.id === id));
+    return results.find(result => result.id === id);
+  };
+  try {
+    await vm.runInNewContext(source, modernContext);
+    assert.ok(modernContext.window.__flotilla);
+    const create = await dispatchModern({op: 'create', wid: emptyInventory ? 'requested' : 'new',
+      args: {localWorkspaceId: emptyInventory ? 'requested' : 'new', title: 'Keep title'}});
+    assert.equal(create.error, undefined);
+    const actualId = emptyInventory ? 'w' : 'new';
+    assert.equal(create.value.workspace.id.localId, actualId);
+    assert.equal(mutations[0][1].title, 'Keep title');
+    const retry = await dispatchModern({op: 'create', wid: actualId, args: {localWorkspaceId: actualId}});
+    assert.equal(retry.error, undefined);
+    assert.equal(mutations.filter(([op]) => op === 'create').length, 1);
+    assert.ok(lookups.includes(actualId));
+    for (const op of ['watch', 'createdSession', 'send', 'archive']) {
+      const result = await dispatchModern({op, wid: 'w', sid: 's', message_id: 'modern',
+        mode: 'steer', prompt: 'hello'});
+      assert.equal(result.error, undefined, op);
+    }
+    for (const op of ['watch', 'select', 'send', 'archive']) {
+      const args = mutations.find(([name]) => name === op)?.[1];
+      assert.ok(args, op);
+      assert.equal(args.workspaceId, WorkspaceId.fromLocalId('w'));
+    }
+    const mutationCount = mutations.length;
+    for (const [wid, sid] of [['w', 'foreign'], ['wrong-workspace', 'wrong-workspace-session']]) {
+      const result = await dispatchModern({op: 'send', wid, sid, message_id: 'bad', mode: 'steer', prompt: 'bad'});
+      assert.match(result.error, /target changed/);
+    }
+    assert.equal(mutations.length, mutationCount);
+    assert.equal(modernContext.window.__flotilla.watches.foreign, undefined);
+  } finally {
+    modernContext.window.__flotilla?.detach();
+    for (const timer of modernTimers) clearInterval(timer);
+  }
+}
+console.log('canonical workspace identity, create retry, empty inventory, and target isolation passed');
