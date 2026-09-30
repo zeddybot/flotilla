@@ -18,7 +18,17 @@
   const sidecar = service('getSessionStatus', 'query', 'resolveToolApproval');
   const control = service('getInitOptions', 'cancelSession', 'sendAskUserQuestionResponse');
   // Probe initialized services, not just exported method names.
-  await workspace.getWorkspaces();
+  let workspaceIdType;
+  const learnWorkspaceId = w => {
+    const type = w?.id?.constructor;
+    if (typeof type?.fromLocalId === 'function') workspaceIdType = type;
+    return w;
+  };
+  for (const w of await workspace.getWorkspaces()) learnWorkspaceId(w);
+  const workspaceId = wid => workspaceIdType ? workspaceIdType.fromLocalId(wid) : wid;
+  const workspaceTarget = wid => workspaceIdType ? {workspaceId: workspaceId(wid)} : {localWorkspaceId: wid};
+  const localWorkspaceId = w => w?.localId ?? w?.id?.localId ?? w?.id;
+  const getWorkspace = async wid => learnWorkspaceId(await workspace.getWorkspace(workspaceId(wid)));
   await workspace.dependencies.repo.getRepos();
   window.__flotilla?.detach();
   const p = {stopped: false, resting: false, missed: {}, sessions: {}, bindings: {...config.bindings}, watches: {}, serial: {}};
@@ -74,10 +84,11 @@
   };
   const bind = async (wid, sid) => {
     try {
-      const w = await workspace.getWorkspace(wid), s = await session.getSession(sid);
-      if (!w || !s || s.localWorkspaceId !== wid || w.state === 'archived') throw Error('Conductor target changed');
+      const w = await getWorkspace(wid), s = await session.getSession(sid);
+      const owner = s?.workspaceId?.localId ?? s?.localWorkspaceId;
+      if (!w || !s || localWorkspaceId(w) !== wid || owner !== wid || w.state === 'archived') throw Error('Conductor target changed');
       p.bindings[sid] = wid;
-      if (!p.watches[sid]) p.watches[sid] = await composer.watchSession({localWorkspaceId: wid, sessionId: sid});
+      if (!p.watches[sid]) p.watches[sid] = await composer.watchSession({...workspaceTarget(wid), sessionId: sid});
       await composer.refresh({sessionId: sid});
       return s;
     } catch (error) {
@@ -109,19 +120,26 @@
     if (c.op === 'repos') return workspace.dependencies.repo.getRepos();
     if (c.op === 'create') {
       let w;
-      try { w = await workspace.getWorkspace(c.wid); } catch { /* factory not called yet */ }
-      if (!w) return workspace.createWorkspaceWithSetup(c.args);
+      try { w = await getWorkspace(c.wid); } catch { /* factory not called yet */ }
+      if (!w) {
+        const {localWorkspaceId: ignoredLocalId, workspaceId: ignoredId, ...args} = c.args;
+        const result = await workspace.createWorkspaceWithSetup({...args, ...workspaceTarget(c.wid)});
+        learnWorkspaceId(result?.workspace);
+        return result;
+      }
+      if (localWorkspaceId(w) !== c.wid) throw Error('Conductor target changed');
       return {workspace: w};
     }
     if (c.op === 'archive') {
-      const w = await workspace.getWorkspace(c.wid);
+      const w = await getWorkspace(c.wid);
+      if (!w || localWorkspaceId(w) !== c.wid) throw Error('Conductor target changed');
       if (w.state === 'archived') return true;
       await bind(c.wid, c.sid);
-      return workspace.archiveWorkspace({localWorkspaceId: c.wid, mode: 'safe', stopRunningAgents: true});
+      return workspace.archiveWorkspace({...workspaceTarget(c.wid), mode: 'safe', stopRunningAgents: true});
     }
     await bind(c.wid, c.sid);
     await lease();
-    if (c.op === 'createdSession') return workspace.setActiveSessionId({localWorkspaceId: c.wid, activeSessionId: c.sid});
+    if (c.op === 'createdSession') return workspace.setActiveSessionId({...workspaceTarget(c.wid), activeSessionId: c.sid});
     if (c.op === 'configure') {
       if (c.configuration.agent === 'acp') {
         const changed = await session.setSessionAgentAndModel({
@@ -144,7 +162,7 @@
       if (intent.paused) return {deferred: true};
       await lease();
       return originalSend.call(composer, {
-        localWorkspaceId: c.wid, sessionId: c.sid, messageId: c.message_id,
+        ...workspaceTarget(c.wid), sessionId: c.sid, messageId: c.message_id,
         mode: c.mode, message: c.prompt, attachmentIds: []
       });
     });

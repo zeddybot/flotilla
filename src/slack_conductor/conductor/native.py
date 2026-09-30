@@ -179,7 +179,19 @@ class Conductor:
             "thinkingLevel": "high",
             "fastMode": False,
         }
-        self.transport.call({"op": "create", "wid": wid, "args": args}, key="create:" + wid)
+        created = self.transport.call(
+            {"op": "create", "wid": wid, "args": args}, key="create:" + wid
+        )
+        if isinstance(created, dict) and isinstance(created.get("workspace"), dict):
+            workspace = created["workspace"]
+            returned = workspace.get("localId") or workspace.get("id")
+            if isinstance(returned, dict):
+                returned = returned.get("localId")
+            if not isinstance(returned, str) or not returned:
+                raise RuntimeError("Created workspace has no local identity")
+            # The durable creation receipt is authoritative if Conductor chose
+            # a different identity. Retrying must recover that same workspace.
+            wid = returned
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             workspaces = self.db.query(
