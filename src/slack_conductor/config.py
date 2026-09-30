@@ -33,11 +33,11 @@ class Config:
     models: dict = field(
         default_factory=lambda: {
             "opus": "Opus 5.5",
-            "sonnet": "Sonnet 5 1M",
+            "sonnet": "Sonnet 5.5",
             "haiku": "Haiku 4.5",
             "fable": "Fable 5.1",
             "astra": "GPT-6 Astra",
-            "sol": "GPT-6 Sol",
+            "sol": "GPT-6.1 Sol",
             "terra": "GPT-5.6 Terra",
             "luna": "GPT-6 Luna",
             "alpha": "Union Alpha Free",

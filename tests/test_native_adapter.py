@@ -198,10 +198,10 @@ def test_recovered_creation_uses_original_workspace_and_session(tmp_path):
     [
         ("fable", "fable-5-1", "claude"),
         ("opus", "opus-5-5-1m", "claude"),
-        ("sonnet", "sonnet-5-1m", "claude"),
+        ("sonnet", "sonnet-5-5-1m", "claude"),
         ("haiku", "haiku-4-5", "claude"),
         ("astra", "gpt-6-astra", "codex"),
-        ("sol", "gpt-6-sol", "codex"),
+        ("sol", "gpt-6.1-sol", "codex"),
         ("terra", "gpt-5.6-terra", "codex"),
         ("luna", "gpt-6-luna", "codex"),
         ("alpha", "opencode:opencode/union-alpha", "acp"),
