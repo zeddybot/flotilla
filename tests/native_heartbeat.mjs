@@ -22,7 +22,8 @@ const install = () => {
       createWorkspaceWithSetup() {}, setActiveSessionId() {}, archiveWorkspace() {},
       dependencies: {repo: {getRepos: async () => []}}
     },
-    session: {getSession: async () => ({}), setSessionAgentAndModel() {}, updateSessionModelConfiguration() {}},
+    session: {getSession: async () => ({}), getCurrentMessageTurnId() {},
+      setSessionAgentAndModel() {}, updateSessionModelConfiguration() {}},
     composer,
     sidecar: {getSessionStatus: async () => ({status: 'idle'}), query() {}, resolveToolApproval() {}},
     control: {getInitOptions() {}, cancelSession() {}, sendAskUserQuestionResponse() {}}

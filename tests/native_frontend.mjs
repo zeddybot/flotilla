@@ -272,7 +272,12 @@ for (const emptyInventory of [false, true]) {
         return {workspaceId: WorkspaceId.fromLocalId(sid === 'foreign' ? 'elsewhere' :
           sid === 'wrong-workspace-session' ? 'wrong-workspace' : 'w'), status: 'idle'};
       },
-      async updateSessionModelConfiguration() {}, async setSessionAgentAndModel() {}
+      async getCurrentMessageTurnId() {}
+    },
+    modelSettings: {
+      calls: [],
+      async updateModelConfiguration(args) { this.calls.push(args); return true; },
+      async updateAgentSelection(args) { this.calls.push(args); return args.model !== 'unavailable'; }
     },
     composer: modernComposer,
     sidecar: {async getSessionStatus() {return {status: 'idle'};}, query() {}, resolveToolApproval() {}},
@@ -310,6 +315,18 @@ for (const emptyInventory of [false, true]) {
     assert.equal(retry.error, undefined);
     assert.equal(mutations.filter(([op]) => op === 'create').length, 1);
     assert.ok(lookups.includes(actualId));
+    for (const agent of ['codex', 'claude', 'acp']) {
+      const configuration = {agent, model: 'test-model'};
+      const configured = await dispatchModern({op: 'configure', wid: 'w', sid: 's', configuration});
+      assert.equal(configured.error, undefined);
+      assert.equal(configured.value, true);
+      assert.equal(JSON.stringify(modernExports.modelSettings.calls.at(-1)), JSON.stringify(
+        agent === 'acp' ? {sessionId: 's', agentType: 'acp', model: 'test-model'} :
+          {sessionId: 's', configuration}));
+    }
+    const rejected = await dispatchModern({op: 'configure', wid: 'w', sid: 's',
+      configuration: {agent: 'acp', model: 'unavailable'}});
+    assert.match(rejected.error, /model selection did not apply/);
     for (const op of ['watch', 'createdSession', 'send', 'archive']) {
       const result = await dispatchModern({op, wid: 'w', sid: 's', message_id: 'modern',
         mode: 'steer', prompt: 'hello'});
