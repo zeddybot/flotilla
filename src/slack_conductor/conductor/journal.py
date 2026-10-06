@@ -19,6 +19,10 @@ class Journal:
                     id TEXT PRIMARY KEY, body TEXT NOT NULL, state TEXT NOT NULL,
                     generation TEXT, response TEXT
                 );
+                CREATE TABLE IF NOT EXISTS deliveries (
+                    command_id TEXT PRIMARY KEY, generation TEXT NOT NULL, poll_id TEXT NOT NULL,
+                    UNIQUE(generation, poll_id)
+                );
                 CREATE TABLE IF NOT EXISTS pauses (
                     session_id TEXT PRIMARY KEY, paused INTEGER NOT NULL,
                     revision INTEGER NOT NULL DEFAULT 1
@@ -55,9 +59,20 @@ class Journal:
             row = c.execute("SELECT body FROM commands WHERE id=?", (key,)).fetchone()
             return json.loads(row["body"]) if row else None
 
-    def claim(self, generation):
+    def claim(self, generation, poll_id=None):
         with self.connect() as c:
             c.execute("BEGIN IMMEDIATE")
+            if poll_id:
+                prior = c.execute(
+                    "SELECT commands.* FROM deliveries JOIN commands ON commands.id=command_id "
+                    "WHERE deliveries.generation=? AND poll_id=?",
+                    (generation, poll_id),
+                ).fetchone()
+                if prior:
+                    # A lost HTTP response must return the same command, never claim another.
+                    if prior["state"] == "running" and prior["generation"] == generation:
+                        return {"id": prior["id"], "body": json.loads(prior["body"])}
+                    return None
             # Shutdown belongs to one attachment, never its replacement. This
             # also retires commands left by versions without a target lease.
             c.execute(
@@ -75,6 +90,11 @@ class Journal:
                 "UPDATE commands SET state='running',generation=? WHERE id=?",
                 (generation, row["id"]),
             )
+            if poll_id:
+                c.execute(
+                    "INSERT OR REPLACE INTO deliveries VALUES (?,?,?)",
+                    (row["id"], generation, poll_id),
+                )
             return {"id": row["id"], "body": json.loads(row["body"])}
 
     def complete(self, key, generation, response):

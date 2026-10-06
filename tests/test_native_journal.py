@@ -144,3 +144,27 @@ def test_bootstrap_module_is_scoped_to_current_attachment(tmp_path):
         assert transport.bootstrap == ""
     finally:
         transport.close()
+
+
+def test_lost_poll_response_replays_same_command_until_acknowledged(tmp_path):
+    transport = Transport(tmp_path, lambda _: True)
+    transport.start()
+    config = transport.attach("app")
+    transport.journal.enqueue("configure", {"op": "configure", "sid": "s", "wid": "w"})
+    transport.journal.enqueue("send", {"op": "send", "sid": "s", "wid": "w"})
+    url = config["base"] + "/next?generation=" + config["generation"]
+
+    def poll(identity):
+        with urlopen(url + "&poll=" + identity) as response:
+            return json.load(response)
+
+    try:
+        poll("lost-response")  # Claim committed, but the frontend never received its body.
+        transport.journal = Journal(tmp_path / "native.sqlite")
+        assert poll("lost-response")["id"] == "configure"
+        assert transport.journal.complete("configure", config["generation"], {"value": True})
+        assert poll("lost-response") is None  # Completed commands cannot execute twice.
+        assert poll("next-response")["id"] == "send"
+        assert poll("empty") is None
+    finally:
+        transport.close()

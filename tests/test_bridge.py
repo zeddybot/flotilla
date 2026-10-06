@@ -266,3 +266,30 @@ def test_pending_outbox_requires_matching_session_prompt_and_live_state(bridge_s
     assert not db.pending("s", "target")
     message(conn, "user", "target", None, sent=None)
     assert db.pending("s", "target")
+
+
+def test_pending_send_event_survives_idle_before_native_prompt_exists(bridge_state):
+    store, conn, db, slack = bridge_state
+    sid = status(store, "pending-send", "original prompt")
+    store.execute("INSERT INTO events(key,payload,state) VALUES ('pending-send','{}','pending')")
+    now = [100.0]
+    poller = Poller(store, db, slack, clock=lambda: now[0], settle_seconds=0)
+    poller.tick()
+    now[0] += 90
+    poller.tick()
+    assert store.status(sid)["state"] == "waiting"
+    assert not store.status(sid)["delivered"]
+    store.execute("UPDATE events SET state='processing' WHERE key='pending-send'")
+    poller.tick()
+    assert store.status(sid)["state"] == "waiting"
+    message(conn, "user", "original prompt", "recovered-turn")
+    result(conn, "recovered reply", "recovered-turn")
+    store.execute("UPDATE events SET state='done' WHERE key='pending-send'")
+    poller.tick()
+    now[0] += 3
+    poller.tick()
+    assert store.status(sid)["state"] == "complete"
+    assert store.status(sid)["result"] == "recovered reply"
+    delivered = len(slack.edits)
+    poller.tick()
+    assert len(slack.edits) == delivered

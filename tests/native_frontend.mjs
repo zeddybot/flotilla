@@ -8,6 +8,7 @@ const cancelled = [], answered = [], plans = [], approvals = [], opened = [], co
 const acpConfigured = [];
 let intent = {paused: false}, release, block = false, reject = false;
 let currentTurn = 'turn-1', questionRows = [], sessionStatus = 'working';
+let losePoll = false, lostClaim;
 const approvalsPending = new Map(), plansPending = new Map();
 const codexPending = new Map(), elicitationPending = new Map();
 const questionsState = {questions: [{question: 'Choose one', options: [{label: 'A'}]}]};
@@ -63,6 +64,22 @@ const context = {
       if (block) await new Promise(resolve => {release = resolve;});
       return {ok: true, json: async () => intent};
     }
+    if (route === 'next' && (losePoll || lostClaim)) {
+      const poll = new URL(url).searchParams.get('poll');
+      assert.ok(poll, 'poll requests need a retry identity');
+      if (lostClaim) {
+        assert.equal(poll, lostClaim.poll);
+        const command = lostClaim.command;
+        lostClaim = undefined;
+        return {ok: true, json: async () => command};
+      }
+      const command = commands.shift();
+      if (command) {
+        losePoll = false;
+        lostClaim = {poll, command};
+        return {ok: true, json: async () => { throw Error('response body lost after claim'); }};
+      }
+    }
     return {ok: true, json: async () => route === 'pause' ? intent : route === 'next' ? commands.shift() ?? null : true};
   }
 };
@@ -104,7 +121,9 @@ try {
   assert.equal(selected[0].localWorkspaceId, 'w');
   assert.equal(selected[0].workspaceId, undefined);
   assert.equal(selected[0].activeSessionId, 's');
+  losePoll = true;
   assert.equal((await dispatch('configure', {op: 'configure', wid: 'w', sid: 's', configuration})).value, true);
+  assert.equal(lostClaim, undefined);
   assert.equal(configured.length, 1);
   assert.equal(configured[0].sessionId, 's');
   assert.deepEqual(JSON.parse(JSON.stringify(configured[0].configuration)), configuration);

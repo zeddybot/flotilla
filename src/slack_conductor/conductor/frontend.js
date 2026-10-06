@@ -313,10 +313,12 @@
   // The Inspector evaluation must finish once installed; returning the lifetime
   // promise can hold subsequent console evaluations behind this attachment.
   void (async () => {
+  let poll = crypto.randomUUID();
   while (!p.stopped) {
     if (p.resting) { await new Promise(r => setTimeout(r, 500)); continue; }
     try {
-      const c = await request('next');
+      const c = await request('next?poll=' + poll);
+      poll = crypto.randomUUID();
       if (c) {
         let result;
         try {

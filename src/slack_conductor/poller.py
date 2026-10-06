@@ -262,7 +262,11 @@ class Poller:
                 return
         if status["state"] == "waiting" and now - self.idle_since.get(status["id"], now) > 30:
             queued = self.db.pending(status["session_id"], status["prompt"])
-            if not queued:
+            sending = self.store.rows(
+                "SELECT key FROM events WHERE key=? AND state IN ('pending','processing')",
+                (status["event_key"],),
+            )
+            if not queued and not sending:
                 self.finish(
                     status,
                     "Agent is idle without a matching reply; check the Conductor session.",
