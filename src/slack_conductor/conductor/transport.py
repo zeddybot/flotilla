@@ -80,7 +80,8 @@ class Transport:
                             self.reply(owner.bootstrap, script=True)
                             return
                         elif route == "next" and not post:
-                            result = owner.journal.claim(generation)
+                            poll_id = parse_qs(url.query).get("poll", [None])[0]
+                            result = owner.journal.claim(generation, poll_id)
                             if result and result["body"].get("sid") and result["body"].get("wid"):
                                 owner.bindings[result["body"]["sid"]] = result["body"]["wid"]
                         elif route == "valid" and not post:
