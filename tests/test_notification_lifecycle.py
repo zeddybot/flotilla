@@ -145,6 +145,11 @@ def test_notification_waits_until_all_final_pages_delivered(bridge_state):
 
 
 def test_startup_delivers_pending_dm_without_dispatching_agent_work(bridge_state, monkeypatch):
+    monkeypatch.setattr(
+        slack_app,
+        "IntakeRecovery",
+        lambda *_: SimpleNamespace(start=lambda: None, close=lambda: None),
+    )
     store, _, db, slack = bridge_state
     notices, sent = attach(store, slack)
     sid = status(store, "request", "task")

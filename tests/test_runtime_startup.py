@@ -31,6 +31,11 @@ class Clock:
 
 
 def service(tmp_path, monkeypatch, attempt, stop):
+    monkeypatch.setattr(
+        slack_app,
+        "IntakeRecovery",
+        lambda *_: SimpleNamespace(start=lambda: None, close=lambda: None),
+    )
     store = Store(tmp_path / "bridge.sqlite")
     closed = []
     client = SimpleNamespace(
