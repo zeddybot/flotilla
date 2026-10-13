@@ -5,10 +5,11 @@ import time
 from contextlib import ExitStack
 
 from slack_bolt import App
-from slack_bolt.adapter.socket_mode import SocketModeHandler
+from slack_bolt.adapter.socket_mode import SocketModeHandler as BoltSocketModeHandler
 
 from .conductor.journal import Unconfirmed
 from .connection_health import ConnectionHealth
+from .intake import audit
 from .monitoring import write_service_status
 from .notifications import Notifications
 from .poller import Poller
@@ -17,6 +18,14 @@ from .protocol import parse, prompt_header
 from .slack_io import SlackIO
 
 log = logging.getLogger(__name__)
+
+
+class SocketModeHandler(BoltSocketModeHandler):
+    def handle(self, client, req):
+        # Record arrival before Bolt authorization/matching can discard an event.
+        if req.type == "events_api":
+            audit(req.payload, "received", "socket")
+        super().handle(client, req)
 
 
 class Bridge:
@@ -33,29 +42,42 @@ class Bridge:
             event.get("type") == "message" and event.get("channel_type") == "im"
         ) or f"<@{self.bot_id}>" in event.get("text", "")
 
-    def receive(self, body):
+    def receive(self, body, *, source="socket"):
         event = body.get("event", {})
         if body.get("team_id") == self.team_id and event.get("user") == self.bot_id:
             self.notifications.acknowledge(event)
-            return
-        if (
-            body.get("team_id") != self.team_id
-            or event.get("user") != self.owner_id
-            or event.get("bot_id")
-            or event.get("subtype")
-            or event.get("hidden")
-        ):
-            return
-        if event.get("type") not in {"app_mention", "message"} or not event.get("text"):
-            return
+            return False
+        reason = next(
+            (
+                name
+                for rejected, name in (
+                    (body.get("team_id") != self.team_id, "wrong_team"),
+                    (event.get("user") != self.owner_id, "not_owner"),
+                    (bool(event.get("bot_id")), "bot"),
+                    (event.get("subtype") not in (None, "file_share"), "unsupported_subtype"),
+                    (bool(event.get("hidden")), "hidden"),
+                    (event.get("type") not in {"app_mention", "message"}, "unsupported_type"),
+                    (not event.get("text"), "empty_text"),
+                )
+                if rejected
+            ),
+            None,
+        )
         channel, ts = event.get("channel"), event.get("ts")
-        if not channel or not ts:
-            return
-        if not self.addressed(event):
-            return
+        reason = reason or ("missing_identity" if not channel or not ts else None)
+        reason = reason or ("not_addressed" if not self.addressed(event) else None)
+        if reason:
+            audit(body, reason, source)
+            return False
         # app_mention + message.channels deliver the same message twice with
         # different event IDs. The channel/message identity is the dedupe key.
-        self.store.accept(f"{self.team_id}:{channel}:{ts}", event)
+        try:
+            accepted = self.store.accept(f"{self.team_id}:{channel}:{ts}", event)
+        except Exception as exc:
+            audit(body, "persist_failed", source, exc)
+            raise
+        audit(body, "accepted" if accepted else "duplicate", source)
+        return accepted
 
     def process(self, envelope):
         key = envelope["key"]
