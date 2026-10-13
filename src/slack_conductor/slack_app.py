@@ -10,6 +10,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler as BoltSocketModeHa
 from .conductor.journal import Unconfirmed
 from .connection_health import ConnectionHealth
 from .intake import audit
+from .intake_recovery import IntakeRecovery
 from .monitoring import write_service_status
 from .notifications import Notifications
 from .poller import Poller
@@ -324,6 +325,9 @@ def run(config, store, conductor, creds, stop):
         bridge.poller.reconcile()
         link = Link(app, creds["SLACK_APP_TOKEN"], stop)
         resources.callback(link.close)
+        recovery = IntakeRecovery(bridge, creds["SLACK_BOT_TOKEN"], stop)
+        recovery.start()
+        resources.callback(recovery.close)
         announced = False
         while True:
             started = time.monotonic()

@@ -278,6 +278,10 @@ def report(config, root=None, *, runtime_ready=None, slack_ready=None):
             except (OSError, ValueError, KeyError, TypeError):
                 pass
         checks = _server_checks(config, now, runtime_ready, slack_ready)
+        if (config.state_dir / "intake-status.json").exists():
+            checks["intake_recovery"] = _json_status(
+                config.state_dir / "intake-status.json", now, 180, ready_key="ready"
+            )
         checks["service"] = _lock_check(config.state_dir)
     else:
         checks = {
