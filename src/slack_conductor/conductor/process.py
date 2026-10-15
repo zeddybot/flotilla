@@ -24,10 +24,20 @@ def incarnation():
                 _cached, _checked = None, 0.0
         if now - _checked >= 0.5:
             # comm contains the executable path, never agent arguments or tokens.
+            # This runs under the attachment lock. Once discovered, inspect only
+            # Conductor: a whole-machine scan can stall heartbeat ingress under load.
+            pid = _cached.split(":", 1)[0] if _cached else None
+            args = ["/bin/ps", "-p", pid, "-o"] if pid else ["/bin/ps", "-axo"]
             try:
                 output = subprocess.check_output(
-                    ["/bin/ps", "-axo", "pid=,lstart=,comm="], text=True, timeout=3
+                    [*args, "pid=,lstart=,comm="], text=True, timeout=0.25 if pid else 3
                 )
+            except subprocess.CalledProcessError as exc:
+                if pid and exc.returncode == 1:
+                    # It exited between kill(0) and ps. Rediscover on the next call.
+                    _cached, _checked = None, 0.0
+                    return None
+                raise
             except subprocess.TimeoutExpired:
                 # ps stalls under memory pressure; kill(0) above still vouches for the
                 # cached pid, and raising here crashes the daemon or drops the attachment.
@@ -42,5 +52,6 @@ def incarnation():
                 ):
                     _cached = fields[0] + ":" + " ".join(fields[1:6])
                     break
-            _checked = now
+            # A slow successful probe must still get a full cache interval.
+            _checked = time.monotonic()
         return _cached

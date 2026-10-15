@@ -55,6 +55,55 @@ def test_stalled_process_probe_keeps_live_identity_and_backs_off(monkeypatch):
     assert len(probes) == 1
 
 
+def test_cached_process_probe_is_targeted_and_bounded(monkeypatch):
+    monkeypatch.setattr(process, "_cached", "22:Thu Sep 10 21:53:00 2026")
+    monkeypatch.setattr(process, "_checked", 0)
+    monkeypatch.setattr(process.time, "monotonic", lambda: 100)
+    monkeypatch.setattr(process.os, "kill", lambda *_: None)
+
+    def output(args, **kwargs):
+        assert args == ["/bin/ps", "-p", "22", "-o", "pid=,lstart=,comm="]
+        assert kwargs["timeout"] == 0.25
+        raise process.subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr(process.subprocess, "check_output", output)
+    assert process.incarnation() == "22:Thu Sep 10 21:53:00 2026"
+
+
+def test_successful_slow_probe_does_not_immediately_probe_again(monkeypatch):
+    monkeypatch.setattr(process, "_cached", None)
+    monkeypatch.setattr(process, "_checked", 0)
+    now = [100]
+    monkeypatch.setattr(process.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(process.os, "kill", lambda *_: None)
+    calls = []
+
+    def output(*args, **kwargs):
+        calls.append(args)
+        now[0] += 2
+        return "22 Thu Sep 10 21:53:00 2026 /Applications/Conductor.app/Contents/MacOS/conductor\n"
+
+    monkeypatch.setattr(process.subprocess, "check_output", output)
+    assert process.incarnation() == process.incarnation()
+    assert len(calls) == 1
+
+
+def test_exit_during_targeted_probe_invalidates_identity_then_rediscovers(monkeypatch):
+    monkeypatch.setattr(process, "_cached", "22:old")
+    monkeypatch.setattr(process, "_checked", 0)
+    monkeypatch.setattr(process.time, "monotonic", lambda: 100)
+    monkeypatch.setattr(process.os, "kill", lambda *_: None)
+
+    def output(args, **kwargs):
+        if "-p" in args:
+            raise process.subprocess.CalledProcessError(1, args)
+        return "23 Thu Sep 10 21:53:00 2026 /Applications/Conductor.app/Contents/MacOS/conductor\n"
+
+    monkeypatch.setattr(process.subprocess, "check_output", output)
+    assert process.incarnation() is None
+    assert process.incarnation() == "23:Thu Sep 10 21:53:00 2026"
+
+
 def inspector_module(monkeypatch):
     import importlib.util
     import sys
