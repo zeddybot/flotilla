@@ -1,4 +1,4 @@
-"""Bounded history reconciliation for missing top-level owner DMs."""
+"""Bounded history reconciliation for owner DMs and their known threads."""
 
 import json
 import logging
@@ -20,6 +20,7 @@ class IntakeRecovery:
     INTERVAL = 60
     WINDOW = 300
     GRACE = 10
+    THREADS_PER_SCAN = 20
 
     def __init__(self, bridge, token, stop, *, client=None, clock=time.time):
         self.bridge, self.stop, self.clock = bridge, stop, clock
@@ -28,6 +29,111 @@ class IntakeRecovery:
         self.finished = threading.Event()
         self.worker = threading.Thread(target=self.run, name="slack-intake-recovery", daemon=True)
         self.path = bridge.config.state_dir / "intake-status.json"
+        self.checkpoints_path = bridge.config.state_dir / "intake-threads.json"
+        self.checkpoints = None
+
+    def save_checkpoints(self):
+        temporary = self.checkpoints_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(self.checkpoints))
+        temporary.chmod(0o600)
+        os.replace(temporary, self.checkpoints_path)
+
+    def thread_messages(self, thread, oldest, latest):
+        messages, cursor = [], None
+        for _ in range(10):
+            if self.finished.is_set() or self.stop.is_set():
+                raise InterruptedError()
+            page = self.client.conversations_replies(
+                channel=self.channel,
+                ts=thread,
+                oldest=str(oldest),
+                latest=str(latest),
+                limit=100,
+                **({"cursor": cursor} if cursor else {}),
+            )
+            messages.extend(page["messages"])
+            cursor = page.get("response_metadata", {}).get("next_cursor")
+            if not cursor:
+                if page.get("has_more"):
+                    raise RuntimeError("Thread page missing continuation cursor")
+                return messages
+        raise RuntimeError("Thread recovery exceeded page budget")
+
+    def recover(self, messages, oldest, latest, thread=None):
+        recovered = 0
+        for message in sorted(messages, key=lambda m: float(m["ts"])):
+            if self.finished.is_set() or self.stop.is_set():
+                raise InterruptedError()
+            if (
+                message.get("user") != self.bridge.owner_id
+                or message.get("edited")
+                or not oldest < float(message["ts"]) < latest
+                or message.get("thread_ts", message["ts"]) != (thread or message["ts"])
+                or message["ts"] == thread
+            ):
+                continue
+            recovered += self.bridge.receive(
+                {
+                    "team_id": self.bridge.team_id,
+                    "event": {**message, "channel": self.channel, "channel_type": "im"},
+                },
+                source="history",
+            )
+        return recovered
+
+    def scan_threads(self, oldest, latest):
+        if self.checkpoints is None:
+            self.checkpoints = (
+                json.loads(self.checkpoints_path.read_text())
+                if self.checkpoints_path.exists()
+                else {}
+            )
+        threads = self.bridge.store.rows(
+            "SELECT thread_ts, MAX(created) AS recent FROM statuses WHERE channel=? "
+            "GROUP BY thread_ts ORDER BY recent DESC",
+            (self.channel,),
+        )
+        for row in threads:
+            self.checkpoints.setdefault(row["thread_ts"], oldest)
+        # Seed every known thread before rotating so a busy channel cannot age a
+        # reply out of the five-minute window before its first scan.
+        self.save_checkpoints()
+        # Keep recent conversations responsive while reserving most of the
+        # budget for a fair rotation through older threads.
+        hot = threads[: self.THREADS_PER_SCAN // 4] if len(threads) > self.THREADS_PER_SCAN else []
+        hot_ids = {row["thread_ts"] for row in hot}
+        selected = hot + sorted(
+            (row for row in threads if row["thread_ts"] not in hot_ids),
+            key=lambda r: self.checkpoints[r["thread_ts"]],
+        )
+        recovered, errors = 0, []
+        for row in selected[: self.THREADS_PER_SCAN]:
+            thread = row["thread_ts"]
+            # Overlap the boundary: Slack's latest and oldest are exclusive.
+            start = self.checkpoints[thread] - 1
+            if latest <= start:
+                continue
+            try:
+                messages = self.thread_messages(thread, start, latest)
+                recovered += self.recover(messages, start, latest, thread)
+            except SlackApiError as exc:
+                if exc.response.get("error") != "thread_not_found":
+                    errors.append(exc)
+                    if exc.response.status_code == 429:
+                        break
+                    continue
+            except InterruptedError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - one bad thread must not starve the rest
+                errors.append(exc)
+                continue
+            # Advance only after all pages have been accepted. A crash before
+            # this write is safe: the original event key deduplicates the retry.
+            self.checkpoints[thread] = latest
+            self.save_checkpoints()
+        if errors:
+            raise errors[-1]
+        return recovered
 
     def status(self, ready, recovered=0, error=None):
         temporary = self.path.with_suffix(".tmp")
@@ -78,26 +184,7 @@ class IntakeRecovery:
                 break
         else:
             raise RuntimeError("History recovery exceeded page budget")
-        recovered = 0
-        for message in sorted(messages, key=lambda m: float(m["ts"])):
-            if self.finished.is_set() or self.stop.is_set():
-                break
-            # History isn't an event stream: do not replay edits or thread replies.
-            if (
-                message.get("user") != self.bridge.owner_id
-                or message.get("edited")
-                or message.get("thread_ts", message["ts"]) != message["ts"]
-                or not oldest < float(message["ts"]) < latest
-            ):
-                continue
-            recovered += self.bridge.receive(
-                {
-                    "team_id": self.bridge.team_id,
-                    "event": {**message, "channel": self.channel, "channel_type": "im"},
-                },
-                source="history",
-            )
-        return recovered
+        return self.recover(messages, oldest, latest) + self.scan_threads(oldest, latest)
 
     def tick(self):
         delay = self.INTERVAL

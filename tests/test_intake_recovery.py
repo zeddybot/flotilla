@@ -160,3 +160,157 @@ def test_unknown_dm_waits_for_trusted_owner_event(bridge_state):
     recovery.tick()
     assert json.loads(recovery.path.read_text())["ready"]
     assert len(store.rows("SELECT * FROM events")) == 1
+
+
+def test_recent_threads_are_checked_each_pass_without_starving_old_threads(bridge_state):
+    threads = tuple(str(n) for n in range(100, 140))
+    _, _, recovery, _ = thread_setup(bridge_state, [], threads=threads)
+    calls = []
+
+    def replies(**kwargs):
+        calls.append(kwargs["ts"])
+        return {"messages": []}
+
+    recovery.client.conversations_replies = replies
+    for now in [1000, 1060, 1120]:
+        recovery.clock = lambda now=now: now
+        assert recovery.scan() == 0
+    assert len(calls) == 60
+    assert set(calls) == set(threads)
+    # The latest thread remains in every batch even with a large backlog.
+    assert all("139" in calls[start : start + 20] for start in [0, 20, 40])
+
+
+def thread_setup(bridge_state, pages, threads=("100",)):
+    store, bridge, recovery, _ = setup(bridge_state, [{"messages": []}] * 20)
+    for thread in threads:
+        store.add_status("root:" + thread, "D1", thread, "root", {})
+    calls = []
+
+    def replies(**kwargs):
+        calls.append(kwargs)
+        page = pages.pop(0)
+        if isinstance(page, Exception):
+            raise page
+        return page
+
+    recovery.client.conversations_replies = replies
+    return store, bridge, recovery, calls
+
+
+def test_old_thread_reply_recovered_with_attachments_and_socket_deduplication(bridge_state):
+    original = message("950", thread_ts="100", files=[{"id": "F1"}])
+    store, bridge, recovery, calls = thread_setup(
+        bridge_state,
+        [
+            {"messages": [message("100"), original], "response_metadata": {"next_cursor": "next"}},
+            {"messages": [message("940", thread_ts="100")]},
+            {"messages": [original]},
+        ],
+    )
+    assert recovery.scan() == 2
+    assert calls[0]["ts"] == "100" and calls[1]["cursor"] == "next"
+    rows = store.rows("SELECT payload FROM events WHERE key='T1:D1:950'")
+    assert json.loads(rows[0]["payload"])["files"] == [{"id": "F1"}]
+    assert not bridge.receive(
+        {
+            "team_id": "T1",
+            "event": {
+                **original,
+                "channel": "D1",
+                "channel_type": "im",
+            },
+        }
+    )
+    recovery.clock = lambda: 1020
+    assert recovery.scan() == 0
+
+
+def test_thread_rotation_checkpoints_survive_restart_and_long_outage(bridge_state):
+    store, _, recovery, calls = thread_setup(
+        bridge_state,
+        [
+            {"messages": []},
+            {"messages": [message("950", thread_ts="200")]},
+        ],
+        threads=("100", "200"),
+    )
+    recovery.THREADS_PER_SCAN = 1
+    # Force a deterministic oldest-first order.
+    recovery.checkpoints = {"100": 700, "200": 701}
+    assert recovery.scan() == 0
+    recovery.checkpoints = None  # Reload persisted state as a new daemon would.
+    recovery.clock = lambda: 2000
+    assert recovery.scan() == 1
+    assert calls[-1]["ts"] == "200"
+    assert store.rows("SELECT key FROM events WHERE key='T1:D1:950'")
+
+
+def test_partial_thread_page_failure_retries_without_skipping_messages(bridge_state):
+    original = message("950", thread_ts="100")
+    store, _, recovery, _ = thread_setup(
+        bridge_state,
+        [
+            {"messages": [original], "has_more": True},
+            {"messages": [original]},
+        ],
+    )
+    recovery.tick()
+    assert recovery.checkpoints["100"] == 700
+    assert not store.rows("SELECT key FROM events WHERE key='T1:D1:950'")
+    recovery.clock = lambda: 2000
+    recovery.tick()
+    assert store.rows("SELECT key FROM events WHERE key='T1:D1:950'")
+    assert recovery.checkpoints["100"] == 1990
+
+
+def test_thread_recovery_filters_untrusted_edited_parent_and_wrong_thread(bridge_state):
+    store, _, recovery, _ = thread_setup(
+        bridge_state,
+        [
+            {
+                "messages": [
+                    message("900"),
+                    message("910", thread_ts="100", user="OTHER"),
+                    message("920", thread_ts="100", edited={"ts": "999"}),
+                    message("930", thread_ts="different"),
+                    message("940", thread_ts="100", bot_id="B"),
+                    message("995", thread_ts="100"),
+                    message("600", thread_ts="100"),
+                ]
+            }
+        ],
+    )
+    assert recovery.scan() == 0
+    assert store.next_event() is None
+
+
+def test_failed_thread_does_not_block_other_threads(bridge_state):
+    store, _, recovery, _ = thread_setup(
+        bridge_state,
+        [
+            TimeoutError(),
+            {"messages": [message("950", thread_ts="200")]},
+        ],
+        threads=("100", "200"),
+    )
+    recovery.checkpoints = {"100": 700, "200": 701}
+    recovery.tick()
+    assert recovery.checkpoints == {"100": 700, "200": 990}
+    assert store.rows("SELECT key FROM events WHERE key='T1:D1:950'")
+    assert not json.loads(recovery.path.read_text())["ready"]
+
+
+def test_reply_exactly_on_previous_scan_boundary_is_not_lost(bridge_state):
+    store, _, recovery, calls = thread_setup(
+        bridge_state,
+        [
+            {"messages": []},
+            {"messages": [message("990", thread_ts="100")]},
+        ],
+    )
+    assert recovery.scan() == 0
+    recovery.clock = lambda: 1060
+    assert recovery.scan() == 1
+    assert float(calls[-1]["oldest"]) < 990
+    assert store.rows("SELECT key FROM events WHERE key='T1:D1:990'")
