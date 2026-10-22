@@ -34,7 +34,7 @@ def service(tmp_path, monkeypatch, attempt, stop):
     monkeypatch.setattr(
         slack_app,
         "IntakeRecovery",
-        lambda *_: SimpleNamespace(start=lambda: None, close=lambda: None),
+        lambda *_, **__: SimpleNamespace(start=lambda: None, close=lambda: None),
     )
     store = Store(tmp_path / "bridge.sqlite")
     closed = []
@@ -192,3 +192,38 @@ def test_shutdown_ends_the_offline_wait_and_a_rejected_token_still_fails():
 
     with pytest.raises(SlackApiError):
         slack_app.identify(SimpleNamespace(auth_test=rejected), "U", stopping)
+
+
+def test_history_recovery_replaces_pong_healthy_socket_without_restarting_native(
+    tmp_path, monkeypatch
+):
+    stop = Clock(monkeypatch)
+    connections, refresh = [], []
+    ticks = []
+
+    def attempt(stage, client):
+        if stage == "connect":
+            connections.append(stop.now)
+            client.current_session = SimpleNamespace(
+                session_id=str(len(connections)),
+                last_ping_pong_time=stop.now,
+            )
+        if stage == "tick":
+            ticks.append(1)
+            if len(ticks) == 1:
+                refresh[0]()
+                refresh[0]()  # A recovered batch requests only one replacement.
+            else:
+                stop.set()
+
+    args, conductor, closed = service(tmp_path, monkeypatch, attempt, stop)
+
+    def recovery(*_, on_recovered):
+        refresh.append(on_recovered)
+        return SimpleNamespace(start=lambda: None, close=lambda: None)
+
+    monkeypatch.setattr(slack_app, "IntakeRecovery", recovery)
+    slack_app.run(*args)
+    assert len(connections) == 2
+    conductor.start.assert_called_once()
+    assert closed == ["health", "socket", "health", "socket", "native"]

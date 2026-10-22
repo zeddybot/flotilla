@@ -314,3 +314,35 @@ def test_reply_exactly_on_previous_scan_boundary_is_not_lost(bridge_state):
     assert recovery.scan() == 1
     assert float(calls[-1]["oldest"]) < 990
     assert store.rows("SELECT key FROM events WHERE key='T1:D1:990'")
+
+
+def test_only_new_recovered_messages_request_connection_refresh(bridge_state):
+    original = message("950", thread_ts="100")
+    _, _, recovery, _ = thread_setup(
+        bridge_state,
+        [
+            {"messages": [original]},
+            {"messages": [original]},
+        ],
+    )
+    refreshes = []
+    recovery.on_recovered = lambda: refreshes.append(True)
+    assert recovery.scan() == 1
+    assert recovery.scan() == 0
+    assert refreshes == [True]
+
+
+def test_recovered_reply_refreshes_connection_even_when_later_thread_fails(bridge_state):
+    _, _, recovery, _ = thread_setup(
+        bridge_state,
+        [
+            {"messages": [message("950", thread_ts="100")]},
+            TimeoutError(),
+        ],
+        threads=("100", "200"),
+    )
+    recovery.checkpoints = {"100": 700, "200": 701}
+    refreshes = []
+    recovery.on_recovered = lambda: refreshes.append(True)
+    recovery.tick()
+    assert refreshes == [True]

@@ -226,6 +226,11 @@ class Link:
         self.retry_at, self.delay = 0, 1
         self.down_since = None
         self.escalated = False
+        self.refresh_requested = threading.Event()
+
+    def refresh(self):
+        # Called by the history worker; only the service loop replaces sockets.
+        self.refresh_requested.set()
 
     def open(self):
         self.handler = SocketModeHandler(self.app, self.token)
@@ -247,6 +252,11 @@ class Link:
 
     def connected(self):
         now = time.monotonic()
+        if self.refresh_requested.is_set() and not self.stop.is_set():
+            self.refresh_requested.clear()
+            log.warning("Replacing Slack connection: history recovered a missed owner message")
+            self.close()
+            self.retry_at = 0
         if not self.health and now >= self.retry_at and not self.stop.is_set():
             self.retry_at, self.delay = now + self.delay, min(self.delay * 2, 60)
             try:
@@ -325,7 +335,7 @@ def run(config, store, conductor, creds, stop):
         bridge.poller.reconcile()
         link = Link(app, creds["SLACK_APP_TOKEN"], stop)
         resources.callback(link.close)
-        recovery = IntakeRecovery(bridge, creds["SLACK_BOT_TOKEN"], stop)
+        recovery = IntakeRecovery(bridge, creds["SLACK_BOT_TOKEN"], stop, on_recovered=link.refresh)
         recovery.start()
         resources.callback(recovery.close)
         announced = False
