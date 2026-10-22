@@ -22,8 +22,9 @@ class IntakeRecovery:
     GRACE = 10
     THREADS_PER_SCAN = 20
 
-    def __init__(self, bridge, token, stop, *, client=None, clock=time.time):
+    def __init__(self, bridge, token, stop, *, client=None, clock=time.time, on_recovered=None):
         self.bridge, self.stop, self.clock = bridge, stop, clock
+        self.on_recovered = on_recovered
         self.client = client or WebClient(token=token, timeout=10, retry_handlers=[])
         self.channel = None
         self.finished = threading.Event()
@@ -72,13 +73,16 @@ class IntakeRecovery:
                 or message["ts"] == thread
             ):
                 continue
-            recovered += self.bridge.receive(
+            accepted = self.bridge.receive(
                 {
                     "team_id": self.bridge.team_id,
                     "event": {**message, "channel": self.channel, "channel_type": "im"},
                 },
                 source="history",
             )
+            recovered += accepted
+            if accepted and self.on_recovered:
+                self.on_recovered()
         return recovered
 
     def scan_threads(self, oldest, latest):
