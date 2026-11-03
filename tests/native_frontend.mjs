@@ -238,7 +238,7 @@ try {
 }
 
 // Modern Conductor requires its own identity class, including prototype getters.
-for (const emptyInventory of [false, true]) {
+for (const [emptyInventory, splitSessions] of [[false, false], [true, false], [false, true], [true, true]]) {
   class WorkspaceId {
     static ids = new Map();
     static fromLocalId(localId) {
@@ -302,8 +302,19 @@ for (const emptyInventory of [false, true]) {
     sidecar: {async getSessionStatus() {return {status: 'idle'};}, query() {}, resolveToolApproval() {}},
     control: {getInitOptions() {}, cancelSession() {}, sendAskUserQuestionResponse() {}}
   };
+  if (splitSessions) {
+    modernExports.sessions = {
+      getSession: modernExports.session.getSession,
+      getSessionsForWorkspace() {}
+    };
+    delete modernExports.session.getSession;
+    // Terminal sessions also expose getSession; never select them by name alone.
+    modernExports.terminal = {getSession() { throw Error('terminal is not an agent session'); }};
+  }
   const modernContext = {
-    testExports: modernExports, console, crypto: context.crypto, document: context.document,
+    testExports: modernExports, console, crypto: context.crypto,
+    document: {scripts: [{type: 'module', src: splitSessions
+      ? 'tauri://localhost/assets/main-BE1h_1MP.js' : '/assets/index-test.js'}]},
     window: {}, AbortSignal, setTimeout, clearTimeout, clearInterval,
     setInterval(fn, ms) { const id = setInterval(fn, ms); modernTimers.add(id); return id; },
     async fetch(url, args) {
@@ -346,6 +357,9 @@ for (const emptyInventory of [false, true]) {
     const rejected = await dispatchModern({op: 'configure', wid: 'w', sid: 's',
       configuration: {agent: 'acp', model: 'unavailable'}});
     assert.match(rejected.error, /model selection did not apply/);
+    const questions = await dispatchModern({op: 'questions', wid: 'w', sid: 's'});
+    assert.equal(questions.error, undefined);
+    assert.equal(questions.value.length, 0);
     for (const op of ['watch', 'createdSession', 'send', 'archive']) {
       const result = await dispatchModern({op, wid: 'w', sid: 's', message_id: 'modern',
         mode: 'steer', prompt: 'hello'});
@@ -369,3 +383,17 @@ for (const emptyInventory of [false, true]) {
   }
 }
 console.log('canonical workspace identity, create retry, empty inventory, and target isolation passed');
+
+for (const scripts of [
+  [{type: 'module', src: '/assets/other.js'}],
+  [{type: '', src: '/assets/main-hash.js'}],
+  [{type: 'module', src: '/assets/main-one.js'}, {type: 'module', src: '/assets/index-two.js'}]
+]) {
+  const errors = [];
+  await vm.runInNewContext(source, {
+    document: {scripts}, window: {}, AbortSignal,
+    console: {error() {}},
+    fetch: async (_url, args) => {errors.push(JSON.parse(args.body)); return {ok: true};}
+  });
+  assert.match(errors.at(-1).error, /entrypoint unavailable or ambiguous/);
+}
