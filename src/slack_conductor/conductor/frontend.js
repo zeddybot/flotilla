@@ -4,8 +4,10 @@
     body: JSON.stringify({generation: config.generation, ready: false, stage: 'bootstrap'}),
     signal: AbortSignal.timeout(5000)
   });
-  const script = [...document.scripts].find(s => s.type === 'module' && s.src.includes('/assets/index-'));
-  if (!script) throw Error('Conductor frontend entrypoint unavailable');
+  const scripts = [...document.scripts].filter(s => s.type === 'module' &&
+    /\/assets\/(?:index|main)-[^/?#]+\.js(?:[?#]|$)/.test(s.src));
+  if (scripts.length !== 1) throw Error('Conductor frontend entrypoint unavailable or ambiguous');
+  const [script] = scripts;
   const exports = Object.values(await import(script.src));
   const service = (...methods) => {
     const candidates = exports.filter(v => v && methods.every(k => typeof v[k] === 'function'));
@@ -13,7 +15,10 @@
     return candidates[0];
   };
   const workspace = service('getWorkspace', 'createWorkspaceWithSetup');
-  const session = service('getSession', 'getCurrentMessageTurnId');
+  const session = service('getCurrentMessageTurnId');
+  // Conductor 0.92 separates session metadata from transcript/turn operations.
+  const sessions = typeof session.getSession === 'function'
+    ? session : service('getSession', 'getSessionsForWorkspace');
   // Conductor 0.90 moved model mutations out of the session service.
   const modelSettings = typeof session.updateSessionModelConfiguration === 'function'
     ? session : service('updateModelConfiguration', 'updateAgentSelection');
@@ -91,7 +96,7 @@
   };
   const bind = async (wid, sid) => {
     try {
-      const w = await getWorkspace(wid), s = await session.getSession(sid);
+      const w = await getWorkspace(wid), s = await sessions.getSession(sid);
       const owner = s?.workspaceId?.localId ?? s?.localWorkspaceId;
       if (!w || !s || localWorkspaceId(w) !== wid || owner !== wid || w.state === 'archived') throw Error('Conductor target changed');
       p.bindings[sid] = wid;
@@ -179,7 +184,7 @@
       return {url};
     });
     if (c.op === 'questions') return serial(c.sid, async () => {
-      const state = await session.getSession(c.sid);
+      const state = await sessions.getSession(c.sid);
       const pending = [];
       for (const [id, approval] of sidecar.pendingToolApprovals || []) {
         if (approval.sessionId !== c.sid) continue;
@@ -243,7 +248,7 @@
       const latest = await latestQuestion(c.sid);
       const expected = response.kind === 'plan' ? 'ExitPlanMode' : 'AskUserQuestion';
       if (latest?.id !== id || latest.name !== expected) throw Error('Conductor question changed');
-      const current = await session.getSession(c.sid);
+      const current = await sessions.getSession(c.sid);
       const status = response.kind === 'plan' ? 'needs_plan_response' : 'needs_user_input';
       if (current.status !== status) throw Error('Conductor question is no longer pending');
       if (response.kind === 'plan') {

@@ -23,7 +23,8 @@ jobs:
         include:
           - {os: ubuntu-latest, python: '3.12'}
           - {os: ubuntu-latest, python: '3.14'}
-          - {os: macos-latest, python: '3.12'}
+          # Pin Intel while the hosted ARM pool is failing to acquire runners.
+          - {os: macos-15-intel, python: '3.12'}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
