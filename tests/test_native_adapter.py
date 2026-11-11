@@ -229,10 +229,10 @@ def test_creation_recovers_returned_identity_from_durable_receipt(
 @pytest.mark.parametrize(
     ("alias", "expected", "agent"),
     [
-        ("fable", "fable-5-1", "claude"),
+        ("fable", "fable-5-2", "claude"),
         ("opus", "opus-5-5-1m", "claude"),
         ("sonnet", "sonnet-5-5-1m", "claude"),
-        ("haiku", "haiku-4-5", "claude"),
+        ("haiku", "haiku-5-5-1m", "claude"),
         ("astra", "gpt-6-astra", "codex"),
         ("sol", "gpt-6.1-sol", "codex"),
         ("terra", "gpt-5.6-terra", "codex"),
@@ -248,6 +248,47 @@ def test_configured_aliases_select_the_expected_engine_and_model(alias, expected
     assert not warning
     assert config["model"] == expected
     assert config["agent"] == agent
+
+
+@pytest.mark.parametrize(
+    ("label", "effort", "fast", "expected", "thinking", "effective_fast", "warning"),
+    [
+        ("Fable 5.2", "ultracode", True, "fable-5-2", "ultracode", True, ""),
+        ("Haiku 5.5", "max", False, "haiku-5-5-1m", "max", False, ""),
+        (
+            "Haiku 5.5",
+            "ultracode",
+            True,
+            "haiku-5-5-1m",
+            "high",
+            False,
+            "effort ultracode unavailable; using high; fast mode unavailable; using standard speed",
+        ),
+        (
+            "Fable 5.1",
+            "ultracode",
+            True,
+            "fable-5-1",
+            "ultracode",
+            False,
+            "fast mode unavailable; using standard speed",
+        ),
+        ("Haiku 4.5", "high", False, "haiku-4-5", None, False, ""),
+    ],
+)
+def test_claude_model_versions_preserve_their_supported_settings(
+    label, effort, fast, expected, thinking, effective_fast, warning
+):
+    config, actual_warning = configuration(
+        {"model": label, "effort": effort, "fast": fast}, Config().model
+    )
+    assert config == {
+        "agent": "claude",
+        "model": expected,
+        **({"thinkingLevel": thinking} if thinking else {}),
+        "fastMode": effective_fast,
+    }
+    assert actual_warning == warning
 
 
 def test_alpha_uses_provider_defaults_for_effort_and_rejects_fast_mode():

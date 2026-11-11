@@ -27,15 +27,15 @@ class Config:
     workspace_root: Path = Path.home() / "conductor/workspaces/ttd"
     conductor_db: Path = Path.home() / "Library/Application Support/com.conductor.app/conductor.db"
     state_dir: Path = Path.home() / "Library/Application Support/slack-conductor"
-    model: str = "Fable 5.1"
+    model: str = "Fable 5.2"
     effort: str = "high"
     send_mode: str = "steer"
     models: dict = field(
         default_factory=lambda: {
             "opus": "Opus 5.5",
             "sonnet": "Sonnet 5.5",
-            "haiku": "Haiku 4.5",
-            "fable": "Fable 5.1",
+            "haiku": "Haiku 5.5",
+            "fable": "Fable 5.2",
             "astra": "GPT-6 Astra",
             "sol": "GPT-6.1 Sol",
             "terra": "GPT-5.6 Terra",
