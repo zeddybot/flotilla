@@ -25,12 +25,14 @@ def test_default_steering_and_explicit_queue_override():
     config = Config()
     _, defaults, _ = parse("start", "B", config)
     assert defaults["send_mode"] == "steer"
-    assert defaults["model"] == "Fable 5.1"
+    assert defaults["model"] == "Fable 5.2"
     _, queued, _ = parse("[queue] next", "B", config, defaults)
     assert queued["send_mode"] == "queue"
     assert parse("next again", "B", config, queued)[1]["send_mode"] == "queue"
     assert parse("[steer] change course", "B", config, queued)[1]["send_mode"] == "steer"
     for token, label in {
+        "fable": "Fable 5.2",
+        "haiku": "Haiku 5.5",
         "astra": "GPT-6 Astra",
         "sol": "GPT-6.1 Sol",
         "sonnet": "Sonnet 5.5",
