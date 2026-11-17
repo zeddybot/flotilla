@@ -12,7 +12,7 @@ from .process import incarnation
 
 log = logging.getLogger(__name__)
 
-BOOTSTRAP_PREFIX = "(()=>{const r=new XMLHttpRequest();"
+BOOTSTRAP_PREFIX = "/* Flotilla native bridge */"
 # How long the frontend keeps intercepting without an acknowledged heartbeat before
 # it rests. Injected into its config so both ends share one number.
 FRONTEND_RELEASE = 30
@@ -38,12 +38,9 @@ def frontend_config(config):
     return {**config, "release": FRONTEND_RELEASE * 1000}
 
 
-def bootstrap_snippet(url):
-    return (
-        BOOTSTRAP_PREFIX + "r.open('GET'," + json.dumps(url) + ",false);r.send();"
-        "if(r.status!==200)throw Error('Attachment expired');"
-        "window.__flotilla?.detach();eval(r.responseText)})();"
-    )
+def bootstrap_snippet(source):
+    # DevTools can execute console input directly, but Conductor's CSP blocks eval.
+    return BOOTSTRAP_PREFIX + "\nwindow.__flotilla?.detach();\n" + source
 
 
 def own_draft(draft):
@@ -58,7 +55,7 @@ def bootstrap_progress(transport):
         return "the frontend started but Conductor's services did not initialize"
     if transport.served:
         return "the console fetched the frontend, which never reported back"
-    return "the console never ran the bootstrap snippet"
+    return "the console bootstrap did not report back"
 
 
 def attach(transport):
@@ -113,21 +110,19 @@ def _attach(transport, ax):
         )
         if menu is None:
             raise RuntimeError("Conductor Inspector unavailable")
-        prompt = ax.find(role="AXTextArea", description="Console prompt")
+        prompt = ax.console_prompt()
         opened = prompt is None
         try:
             if opened:
                 ax.press(menu)
                 time.sleep(0.5)
-            prompt = ax.find(role="AXTextArea", description="Console prompt")
+            prompt = ax.console_prompt()
             if prompt is None:
-                tab = ax.find(role="AXRadioButton", title="Console") or ax.find(
-                    role="AXButton", title="Console"
-                )
+                tab = ax.console_tab()
                 if tab:
                     ax.press(tab)
                 prompt = ax.wait(
-                    lambda: ax.find(role="AXTextArea", description="Console prompt"),
+                    ax.console_prompt,
                     "Inspector console unavailable",
                     5,
                 )
@@ -144,7 +139,6 @@ def _attach(transport, ax):
                 .read_text()
                 .replace("__CONFIG__", json.dumps(frontend_config(config)))
             )
-            url = config["base"] + "/bootstrap?generation=" + config["generation"]
             ax.set(prompt, "AXFocused", True)
             if draft:
                 # Replacing a previous attempt's snippet means selecting it first.
@@ -153,7 +147,7 @@ def _attach(transport, ax):
                 if not attr(prompt, "AXFocused"):
                     raise RuntimeError("Inspector console prompt did not take focus")
                 ax.select_all()
-            ax.type_text(bootstrap_snippet(url))
+            ax.type_text(bootstrap_snippet(transport.bootstrap))
             time.sleep(0.2)
             for down in (True, False):
                 event = Quartz.CGEventCreateKeyboardEvent(None, 36, down)
@@ -176,8 +170,8 @@ def _attach(transport, ax):
                 20,
             )
         finally:
-            if opened and ax.find(role="AXTextArea", description="Console prompt") is not None:
-                ax.press(menu)
+            if opened and ax.console_prompt() is not None:
+                ax.close_console()
 
 
 class Attachment:

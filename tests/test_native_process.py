@@ -157,6 +157,41 @@ def test_offscreen_ax_window_still_switches_and_restores_aerospace(monkeypatch):
     assert commands[0][1:4] == ["list-windows", "--monitor", "all"]
 
 
+def test_console_controls_target_chromium_prompt_without_touching_composer(monkeypatch):
+    module = inspector_module(monkeypatch)
+    prompt = {"AXRole": "AXTextArea", "AXTitle": "Console prompt", "AXValue": "unsent command"}
+    tab = {"AXRole": "AXRadioButton", "AXTitle": "Console"}
+    composer = {"AXRole": "AXTextArea", "AXTitle": "Add a follow up"}
+    root = {"AXChildren": [composer, tab, prompt]}
+    monkeypatch.setattr(module, "attr", lambda node, key: node.get(key))
+    ax = module.Inspector()
+    monkeypatch.setattr(ax, "window", lambda: root)
+    assert ax.console_prompt() is prompt
+    assert ax.console_tab() is tab
+    assert ax.draft(prompt) == "unsent command"
+    root["AXChildren"] = [composer]
+    assert ax.console_prompt() is None
+    assert ax.console_tab() is None
+
+
+def test_close_console_only_closes_devtools(monkeypatch):
+    module = inspector_module(monkeypatch)
+    close = {"AXRole": "AXButton", "AXTitle": "Close"}
+    unrelated_close = {"AXRole": "AXButton", "AXTitle": "Close"}
+    devtools = {"AXRole": "AXWebArea", "AXTitle": "DevTools", "AXChildren": [close]}
+    root = {"AXChildren": [unrelated_close, devtools]}
+    monkeypatch.setattr(module, "attr", lambda node, key: node.get(key))
+    ax = module.Inspector()
+    monkeypatch.setattr(ax, "window", lambda: root)
+    pressed = []
+    monkeypatch.setattr(ax, "press", pressed.append)
+    ax.close_console()
+    assert pressed == [close]
+    root["AXChildren"] = [unrelated_close]
+    ax.close_console()
+    assert pressed == [close]
+
+
 def test_new_app_does_not_inherit_failed_attachment_backoff(monkeypatch):
     import sys
     from types import SimpleNamespace
@@ -426,7 +461,7 @@ def test_failed_bootstrap_reports_how_far_it_got(tmp_path, monkeypatch):
     try:
         config = transport.attach("app")
         transport.bootstrap = "void 0"
-        assert "never ran the bootstrap snippet" in attachment.bootstrap_progress(transport)
+        assert "console bootstrap did not report back" in attachment.bootstrap_progress(transport)
         url = urlparse(config["base"])
         connection = HTTPConnection(url.hostname, url.port, timeout=2)
         try:
@@ -440,7 +475,7 @@ def test_failed_bootstrap_reports_how_far_it_got(tmp_path, monkeypatch):
         transport.heartbeat = {"ready": True}
         assert "heartbeats stopped" in attachment.bootstrap_progress(transport)
         transport.attach("app")
-        assert "never ran the bootstrap snippet" in attachment.bootstrap_progress(transport)
+        assert "console bootstrap did not report back" in attachment.bootstrap_progress(transport)
     finally:
         transport.close()
 
@@ -448,10 +483,10 @@ def test_failed_bootstrap_reports_how_far_it_got(tmp_path, monkeypatch):
 def test_own_bootstrap_draft_is_reclaimed_but_typed_input_is_not():
     from slack_conductor.conductor import attachment
 
-    snippet = attachment.bootstrap_snippet("http://127.0.0.1:1/t/bootstrap?generation=g")
+    snippet = attachment.bootstrap_snippet("void 0;")
     assert attachment.own_draft(snippet)
-    # Web Inspector reports the prompt as highlighted spans joined without spacing.
-    assert attachment.own_draft(snippet.replace("const r", "const  r"))
+    # Highlighted spans can change whitespace in the accessible draft.
+    assert attachment.own_draft(snippet.replace("native bridge", "native  bridge"))
     assert not attachment.own_draft("await workspace.getWorkspaces()")
     assert not attachment.own_draft("")
 
@@ -466,3 +501,24 @@ def test_release_window_reaches_the_frontend_under_the_name_it_reads():
     # would keep a frontend the daemon abandoned patched over the composer forever.
     assert "config.release" in source
     assert attachment.frontend_config({})["release"] == attachment.FRONTEND_RELEASE * 1000
+
+
+def test_bootstrap_executes_source_without_csp_blocked_eval(tmp_path):
+    import json
+    import subprocess
+
+    from slack_conductor.conductor import attachment
+
+    script = tmp_path / "bootstrap.cjs"
+    # Model a console where string compilation is disabled by CSP, and verify that
+    # the previous bridge detaches before the replacement starts.
+    script.write_text(
+        "const vm = require('node:vm');\n"
+        "const calls = [];\n"
+        "vm.runInNewContext("
+        + json.dumps(attachment.bootstrap_snippet("calls.push('started');"))
+        + ", {calls, window: {__flotilla: {detach() {calls.push('detached')}}}}, "
+        "{contextCodeGeneration: {strings: false, wasm: false}});\n"
+        "require('node:assert/strict').deepEqual(calls, ['detached', 'started']);\n"
+    )
+    subprocess.run(["node", str(script)], check=True, capture_output=True, text=True)

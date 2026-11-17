@@ -184,6 +184,19 @@ class Inspector:
             return None
         return next((e for e in walk(root) if matches(e, **selector)), None)
 
+    def console_prompt(self):
+        return self.find(role="AXTextArea", title="Console prompt")
+
+    def console_tab(self):
+        return self.find(role="AXRadioButton", title="Console")
+
+    def close_console(self):
+        devtools = self.find(role="AXWebArea", title="DevTools")
+        if devtools is not None:
+            close = self.find(root=devtools, role="AXButton", title="Close")
+            if close is not None:
+                self.press(close)
+
     @staticmethod
     def press(element, action="AXPress"):
         error = AX.AXUIElementPerformAction(element, action)
