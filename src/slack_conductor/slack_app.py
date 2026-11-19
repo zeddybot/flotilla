@@ -211,10 +211,16 @@ class Bridge:
                 return
             thread = self.store.thread(channel, thread_ts)
             previous = json.loads(thread["options"]) if thread else None
-            text, options, command = parse(event["text"], self.bot_id, self.config, previous)
             contributor = self.routed and event.get("user") != self.owner_id
             baseline = parse("", self.bot_id, self.config, previous)[1]
-            if contributor and (not thread or command or options != baseline):
+            if contributor:
+                baseline["send_mode"] = "queue"
+            text, options, command = parse(event["text"], self.bot_id, self.config, baseline)
+            if contributor and (
+                not thread
+                or command
+                or any(options[key] != baseline[key] for key in baseline if key != "send_mode")
+            ):
                 raise ValueError(
                     "Only the thread owner can start a session or change session settings."
                 )
@@ -258,8 +264,6 @@ class Bridge:
                 prompt = prompt_header(
                     channel, thread_ts, event["ts"], permalink, text, sender=event.get("user")
                 )
-                if contributor:
-                    options = {**options, "send_mode": "queue"}
                 status_id = self.store.add_status(key, channel, thread_ts, prompt, options)
                 status_ts = self.store.status(status_id)["status_ts"] or self.slack.post(
                     channel,

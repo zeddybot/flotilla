@@ -244,8 +244,8 @@ def test_two_enrolled_users_keep_thread_routing_and_retries_isolated(tmp_path, c
         process(mac_bridge)
         complete(mac_bridge, "T1:C1:1")
 
-        dispatch("U2", "3", "collaborator continuation", thread="1")
-        dispatch("U2", "3", "collaborator continuation", thread="1")
+        dispatch("U2", "3", "[steer] collaborator continuation", thread="1")
+        dispatch("U2", "3", "[steer] collaborator continuation", thread="1")
         process(mac_bridge)
         complete(mac_bridge, "T1:C1:3")
         dispatch("U2", "4", "[stop]", thread="1")
@@ -256,7 +256,7 @@ def test_two_enrolled_users_keep_thread_routing_and_retries_isolated(tmp_path, c
         assert len(native.sends) == 2
         assert native.sends[0][:2] == native.sends[1][:2]
         assert "collaborator continuation" in native.sends[1][2]
-        assert native.sends[1][3]["send_mode"] == "queue"
+        assert native.sends[1][3]["send_mode"] == "steer"
         assert len(calls.read_text().splitlines()) == 1
         assert mac_bridge.store.next_event() is None and worker_bridge.store.next_event() is None
         assert [post[3] for post in slack.posts if post[3].startswith("status:")] == [
