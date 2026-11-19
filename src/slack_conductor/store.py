@@ -27,6 +27,15 @@ CREATE TABLE IF NOT EXISTS notifications (
  state TEXT NOT NULL DEFAULT 'pending', dm_channel TEXT, dm_ts TEXT, permalink TEXT,
  attempted_at REAL, retry_at REAL NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS slack_routes (
+ team_id TEXT NOT NULL, channel TEXT NOT NULL, thread_ts TEXT NOT NULL,
+ owner_id TEXT NOT NULL, client_id TEXT NOT NULL,
+ PRIMARY KEY(team_id,channel,thread_ts)
+);
+CREATE TABLE IF NOT EXISTS slack_route_migrations (team_id TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS slack_legacy_defaults (
+ team_id TEXT PRIMARY KEY, client_id TEXT NOT NULL
+);
 """
 
 
@@ -37,6 +46,8 @@ class Store:
             conn.executescript(SCHEMA)
             if "retry_at" not in {row[1] for row in conn.execute("PRAGMA table_info(events)")}:
                 conn.execute("ALTER TABLE events ADD COLUMN retry_at REAL NOT NULL DEFAULT 0")
+            if "control" not in {row[1] for row in conn.execute("PRAGMA table_info(events)")}:
+                conn.execute("ALTER TABLE events ADD COLUMN control TEXT")
             columns = {row[1] for row in conn.execute("PRAGMA table_info(statuses)")}
             if "tracking" not in columns:
                 conn.execute("ALTER TABLE statuses ADD COLUMN tracking TEXT NOT NULL DEFAULT '{}'")
@@ -84,9 +95,88 @@ class Store:
                 == 1
             )
 
+    def migrate_legacy_routes(self, team_id, owner_id, client_id):
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not conn.execute(
+                "INSERT OR IGNORE INTO slack_route_migrations VALUES (?)", (team_id,)
+            ).rowcount:
+                return
+            conn.execute(
+                "INSERT OR IGNORE INTO slack_routes "
+                "SELECT ?,channel,thread_ts,?,? FROM threads "
+                "UNION SELECT ?,channel,thread_ts,?,? FROM statuses",
+                (team_id, owner_id, client_id, team_id, owner_id, client_id),
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO slack_routes "
+                "SELECT ?,json_extract(payload,'$.channel'),"
+                "coalesce(json_extract(payload,'$.thread_ts'),json_extract(payload,'$.ts')),?,? "
+                "FROM events WHERE json_extract(payload,'$.user')=? "
+                "AND json_extract(payload,'$.channel') IS NOT NULL "
+                "AND json_extract(payload,'$.ts') IS NOT NULL",
+                (team_id, owner_id, client_id, owner_id),
+            )
+
+    def route(self, team_id, channel, thread_ts):
+        routes = self.rows(
+            "SELECT owner_id,client_id FROM slack_routes WHERE team_id=? AND channel=? AND thread_ts=?",
+            (team_id, channel, thread_ts),
+        )
+        return routes[0] if routes else None
+
+    def legacy_default(self, team_id, fallback):
+        rows = self.rows("SELECT client_id FROM slack_legacy_defaults WHERE team_id=?", (team_id,))
+        return rows[0]["client_id"] if rows else fallback
+
+    def set_legacy_default(self, team_id, client_id):
+        self.execute(
+            "INSERT INTO slack_legacy_defaults VALUES (?,?) "
+            "ON CONFLICT(team_id) DO UPDATE SET client_id=excluded.client_id",
+            (team_id, client_id),
+        )
+
+    def accept_routed(self, team_id, event, route, destination):
+        """Atomically claim the thread and queue its first prompt in the winning client's store."""
+        channel, timestamp = event["channel"], event["ts"]
+        identity = (team_id, channel, event.get("thread_ts") or timestamp)
+        key = f"{team_id}:{channel}:{timestamp}"
+        with self.connect() as conn:
+            table = "main.events"
+            if destination.path != self.path:
+                conn.execute("ATTACH DATABASE ? AS endpoint", (str(destination.path),))
+                table = "endpoint.events"
+            # Bridge databases use SQLite's rollback-journal mode, which makes
+            # the two-file commit atomic, including after process interruption.
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT OR IGNORE INTO slack_routes VALUES (?,?,?,?,?)",
+                (*identity, route["owner_id"], route["client_id"]),
+            )
+            winning = dict(
+                conn.execute(
+                    "SELECT owner_id,client_id FROM slack_routes "
+                    "WHERE team_id=? AND channel=? AND thread_ts=?",
+                    identity,
+                ).fetchone()
+            )
+            if winning != route:
+                return winning, False
+            inserted = conn.execute(
+                f"INSERT OR IGNORE INTO {table}(key,payload) VALUES (?,?)",
+                (key, json.dumps(event)),
+            ).rowcount
+            return winning, bool(inserted)
+
     def next_event(self):
         rows = self.rows(
-            "SELECT * FROM events WHERE state='pending' AND retry_at<=unixepoch('now') ORDER BY created,rowid LIMIT 1"
+            "SELECT e.* FROM events e WHERE e.state='pending' AND e.retry_at<=unixepoch('now') "
+            "AND NOT EXISTS (SELECT 1 FROM events prior "
+            "WHERE prior.rowid<e.rowid AND prior.state IN ('pending','processing') "
+            "AND json_extract(prior.payload,'$.channel')=json_extract(e.payload,'$.channel') "
+            "AND coalesce(json_extract(prior.payload,'$.thread_ts'),json_extract(prior.payload,'$.ts'))="
+            "coalesce(json_extract(e.payload,'$.thread_ts'),json_extract(e.payload,'$.ts'))) "
+            "ORDER BY e.created,e.rowid LIMIT 1"
         )
         return rows[0] if rows else None
 

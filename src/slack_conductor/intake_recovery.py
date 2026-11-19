@@ -22,9 +22,12 @@ class IntakeRecovery:
     GRACE = 10
     THREADS_PER_SCAN = 20
 
-    def __init__(self, bridge, token, stop, *, client=None, clock=time.time, on_recovered=None):
+    def __init__(
+        self, bridge, token, stop, *, client=None, clock=time.time, on_recovered=None, receive=None
+    ):
         self.bridge, self.stop, self.clock = bridge, stop, clock
         self.on_recovered = on_recovered
+        self.receive = receive or bridge.receive
         self.client = client or WebClient(token=token, timeout=10, retry_handlers=[])
         self.channel = None
         self.finished = threading.Event()
@@ -73,7 +76,7 @@ class IntakeRecovery:
                 or message["ts"] == thread
             ):
                 continue
-            accepted = self.bridge.receive(
+            accepted = self.receive(
                 {
                     "team_id": self.bridge.team_id,
                     "event": {**message, "channel": self.channel, "channel_type": "im"},
@@ -205,7 +208,8 @@ class IntakeRecovery:
         return delay
 
     def run(self):
-        while not self.stop.is_set() and not self.finished.is_set():
+        enabled = getattr(getattr(self.bridge, "conductor", None), "enabled", lambda: True)
+        while not self.stop.is_set() and not self.finished.is_set() and enabled():
             try:
                 delay = self.tick()
             except OSError:

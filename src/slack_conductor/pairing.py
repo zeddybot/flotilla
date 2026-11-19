@@ -114,7 +114,13 @@ class PairingStore:
             )
 
     def claim(
-        self, code: str, team_id: str, user_id: str, *, event_key: str | None = None
+        self,
+        code: str,
+        team_id: str,
+        user_id: str,
+        *,
+        event_key: str | None = None,
+        reserved_names: tuple[str, ...] = (),
     ) -> ClientProfile:
         if not PAIR_CODE.fullmatch(code):
             raise ValueError("Invalid or expired pairing code")
@@ -134,6 +140,8 @@ class PairingStore:
             ).fetchone()
             if pending is None:
                 raise ValueError("Invalid or expired pairing code")
+            if pending["name"] in reserved_names:
+                raise ValueError("That client profile name is reserved")
             if db.execute(
                 """SELECT 1 FROM client_profiles
                    WHERE team_id = ? AND user_id = ? AND name = ? AND revoked = 0""",

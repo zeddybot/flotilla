@@ -47,7 +47,9 @@ class Notifications:
         )
         row.update(values)
 
-    def reply_target(self, channel, thread_ts):
+    def reply_target(self, channel, thread_ts, *, actor=None):
+        if actor is not None and actor != self.owner_id:
+            return None
         rows = self.store.rows(
             "SELECT * FROM notifications WHERE dm_channel=? AND dm_ts=? AND owner_id=?",
             (channel, thread_ts, self.owner_id),

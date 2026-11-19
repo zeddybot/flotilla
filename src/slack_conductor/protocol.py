@@ -4,6 +4,17 @@ import re
 EFFORTS = {"low", "medium", "high", "xhigh", "max", "ultracode"}
 
 
+def profile_selector(text, bot_id):
+    prefix = re.match(rf"^\s*(?:<@{re.escape(bot_id)}>\s*)?", text)[0]
+    match = re.match(r"\[profile:([^\]]*)\]\s*", text[len(prefix) :], re.IGNORECASE)
+    if not match:
+        return None, text
+    name = match[1].strip().lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,31}", name):
+        raise ValueError("Use [profile:name] at the start of your message.")
+    return name, prefix + text[len(prefix) + match.end() :]
+
+
 def parse(text, bot_id, config, previous=None):
     text = re.sub(rf"^\s*<@{re.escape(bot_id)}>\s*", "", text)
     options = {
@@ -14,10 +25,11 @@ def parse(text, bot_id, config, previous=None):
         "verbose": False,
     }
     if previous:
-        options.update({key: previous[key] for key in options})
+        options.update({key: previous[key] for key in options if key in previous})
     command = None
     while match := re.match(r"^\s*\[([^\]]+)\]\s*", text):
-        token = match[1].lower()
+        raw_token = match[1]
+        token = raw_token.lower()
         if token in config.models:
             options["model"] = config.models[token]
         elif token in EFFORTS:
@@ -26,19 +38,25 @@ def parse(text, bot_id, config, previous=None):
             options[token] = True
         elif token in {"queue", "steer"}:
             options["send_mode"] = token
-        elif token in {"new", "close"}:
-            if command and command != token:
-                raise ValueError("Use either [new] or [close], not both")
-            command = token
+        elif token in {"new", "close", "stop", "questions"} or token.partition(":")[0] in {
+            "approve",
+            "deny",
+            "answer",
+        }:
+            if command:
+                raise ValueError("Choose one session command per message.")
+            action, sep, question_id = raw_token.partition(":")
+            command = action.lower() + sep + question_id
         else:
             break  # Unknown bracket text belongs to the prompt.
         text = text[match.end() :]
     return html.unescape(text).strip(), options, command
 
 
-def prompt_header(channel, thread_ts, message_ts, permalink, text):
+def prompt_header(channel, thread_ts, message_ts, permalink, text, *, sender=None):
+    attribution = f" sender=<@{sender}>" if sender else ""
     return (
-        f"[slack] channel={channel} thread_ts={thread_ts} message_ts={message_ts} permalink={permalink}\n"
+        f"[slack] channel={channel} thread_ts={thread_ts} message_ts={message_ts} permalink={permalink}{attribution}\n"
         "You already have Slack tools; read the thread or channel yourself if you need more context.\n"
         "The bridge relays your final reply to this thread. Do not post to Slack yourself.\n"
         "When your reply directly addresses someone or needs their action, @mention that "
