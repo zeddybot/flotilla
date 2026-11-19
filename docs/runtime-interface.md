@@ -8,8 +8,7 @@ Conductor and the headless Claude/Codex worker implement the same session bounda
 The server owns Slack credentials, authorization, thread bindings, delivery, and
 presentation. The client owns execution, engine credentials, workspace access,
 file snapshots, and normalized observations. Runtime selection is configured with
-`runtime_adapter = "conductor"` or `"headless"`. A server still owns exactly one
-client connection; this is not multi-worker routing or a third-party plugin SDK.
+`runtime_adapter = "conductor"` or `"headless"`. Each paired connection owns its own session bindings, command receipts, event cursors and file transfers.
 
 | Operation | Contract |
 | --- | --- |
@@ -93,3 +92,9 @@ The stack's tests and isolated native/Daytona qualification do not themselves
 upgrade the production server/client pair. Keep rollback code and validate the
 actual deployed versions, existing threads, queue/steer, callbacks, file delivery,
 and archive after the coordinated rollout.
+
+## Streaming output
+
+An event envelope carries a session, native turn, durable sequence, role and normalized event. Both Claude adapters translate the same native messages. A `text_start` opens a message, and ordered `text_delta` events append text within a numbered block. A full `update` containing output parts replaces the visible text. Codex publishes replacements when its CLI reports updated messages. A textual `result` supplies the final revision. A completion with an empty result retains the most recent output.
+
+The server persists the rendered turn state and consumed cursor together. Slack edits are coalesced; final delivery edits the existing status and adds continuation messages for overflow. A result stays provisional while background callbacks or more replay pages are pending. Activity and tool names can appear in Slack. Private reasoning and tool arguments are excluded from newly normalized updates.

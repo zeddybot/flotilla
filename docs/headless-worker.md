@@ -1,6 +1,6 @@
 # Headless worker pilot
 
-The headless worker runs Claude Code or Codex in a dedicated Linux client. It connects outbound to one private Flotilla control server. The control server still owns Slack credentials and delivery state; the worker owns its repository, agent authentication, sessions, processes, and file snapshots. This is an isolated single-owner pilot. The current server accepts one client: a worker cannot join beside the connected Mac client, replace it live, or import its Conductor bindings. Use a separate control server and token for validation.
+The headless client runs Claude or Codex in a repository on its host. It can share the Slack server with Conductor and other paired clients. Pair each worker with a separate credential and profile using the [client setup guide](connect-client.md). The operator can also provision a dedicated standalone control server as described below.
 
 ## Build and provision
 

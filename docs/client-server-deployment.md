@@ -1,9 +1,6 @@
-# Single-owner Daytona pilot
+# Deploy the Flotilla server on Daytona
 
-The server owns Slack Socket Mode, `bridge.sqlite`, and `remote.sqlite`. The Mac
-client owns Conductor access and `native.sqlite`. Keep the GitHub repository
-private. Only the server receives Slack tokens; only the Mac has Conductor and
-repository paths. Run exactly one Slack consumer during cutover.
+Run one Slack consumer per workspace. Its root state holds the original client's bridge and receipts, thread routes and the profile registry. Each paired client has an isolated state directory under `clients/<id>`. Store Slack tokens on the server and engine credentials on their execution hosts. To admit a teammate, add their Slack member ID to the top-level `pairing_allowed_users` array in the private server config and restart the service. Send them the server URL and the [client setup guide](connect-client.md).
 
 ## Build and start
 
@@ -81,7 +78,7 @@ The initial cutover from the retired all-in-one release stopped its Mac daemon
 before export. For subsequent server moves or restores, put the current server
 on `HOLD` before exporting. The exporter refuses an active `daemon.lock` and captures a consistent
 SQLite backup. It includes thread bindings, pending events/statuses,
-notifications, remote receipts when present, and referenced upload snapshots.
+notifications, client profile IDs, token digests, revocations, history checkpoints, remote receipts and referenced uploads in each client scope.
 It excludes `native.sqlite`, native attachment files, and Conductor's database.
 Treat the archive as a secret because it may contain messages and signed upload
 URLs.
@@ -121,7 +118,7 @@ For a server-host move, transfer the export and import it into the replacement
 state directory while both servers are stopped. Completed snapshots are omitted;
 unfinished Slack uploads retain their saved snapshots and file IDs. Partial
 Mac-to-server downloads restart from the Mac's durable snapshot after a restore.
-The migration archive does not contain Mac-native state or credentials. Preserve
+The archive contains private messages and client credential digests. Back up the raw token files and native Mac state separately. Preserve
 the Mac client state and provision the replacement server credentials separately.
 
 Daytona container filesystems survive stop/start, but processes do not. Disable

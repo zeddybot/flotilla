@@ -4,65 +4,11 @@
 
 Mention **@flotilla** in Slack or send it a DM to start an agent in your configured repository. In a channel, mention **@flotilla** on each follow-up to continue the thread’s session. Flotilla edits its status message as the agent works and delivers the answer and files in that thread.
 
-With the Conductor client, the agent runs on your Mac and you can open the same workspace in Conductor. The Mac connects outbound to the Slack server, which can run on Daytona. See the [deployment and rollback guide](docs/client-server-deployment.md) and [validation record](docs/client-server-validation.md).
-
-The bot always sends the configured owner a fresh DM when a reply reaches **Done**, **Failed**, or **Needs attention** (including questions and permission/plan requests). Each DM contains the task and a link to the original reply. Completion waits for background work and final files/pages; superseded steers and historical completed replies do not generate completion alerts. Follow up in the original thread; replies to notification DMs show a link back and do not create an agent. There is no notification preference or opt-out command.
-
-Notification delivery is persisted separately from answer delivery. After a lost send response, the bridge checks DM history for the same notification before retrying. If the very first DM response is lost before the bridge knows the DM channel, sending a message to the bot supplies that identity and allows reconciliation. Slack desktop/mobile alerts still follow your Slack notification and Do Not Disturb settings.
-
-Only the configured Slack owner can issue commands. The Daytona server owns Slack credentials and delivery state; the Mac client reads Conductor's SQLite database in read-only mode and calls its native services for agent actions. macOS Accessibility is used only to attach the native dispatcher. The bridge never writes Conductor's database. Ordinary messages typed in Conductor are not relayed.
+With the Conductor client, the agent runs on your Mac. With a headless client, it runs Claude or Codex in its configured repository on Daytona. Flotilla routes each new Slack thread to the first summoner’s default or named profile. Registered teammates can prompt the same agent. Its owner controls approvals, interruption and session replacement.
 
 ## Install
 
-The server and Mac client are the only runtime modes. Follow the
-[deployment guide](docs/client-server-deployment.md) to provision Daytona.
-For the host-local `flotilla` command, separate config directory, and service
-operations, see the [Flotilla CLI guide](docs/flotilla-cli.md).
-The server owns the Slack bot/app tokens; the Mac holds only its client token
-and existing Conductor credentials. For development, both processes can run on
-the same machine with `ws://localhost:8765/client` and separate state directories.
-
-The Mac needs Conductor and [uv](https://docs.astral.sh/uv/). Copy
-`config.example.toml` to `config.toml`, review the repository/workspace paths,
-and set the server's actual preview address and a mode-600 token file:
-
-```toml
-mode = "client"
-server_url = "wss://<preview-host>/client"
-remote_token_file = "/absolute/private/path/client.token"
-```
-
-Install or update the Mac client:
-
-```sh
-uv sync --frozen
-uv run python scripts/install_service.py
-uv run sc doctor
-```
-
-The installer builds a private runtime behind
-`~/Library/Application Support/slack-conductor/runtime`, installs locked
-production dependencies, and registers
-`~/Library/LaunchAgents/com.sameer.slack-conductor.plist`. It always installs
-client mode and does not copy a Slack `.env` into the new runtime. Rerun it after
-client code, configuration, or token changes. It does not edit shell startup
-files or add `sc` to PATH; it creates a `flotilla` wrapper in `~/.local/bin`.
-
-The client starts at user login, restarts after failure, and needs a logged-in
-desktop session. Daytona can receive requests while the Mac is offline;
-execution resumes when the client reconnects. If Accessibility access is denied,
-allow the runtime's Python interpreter under System Settings → Privacy & Security
-→ Accessibility. Inspect the installed service's log as well as `sc doctor`.
-
-```sh
-launchctl print "gui/$(id -u)/com.sameer.slack-conductor"
-tail -n 40 "$HOME/Library/Application Support/slack-conductor/daemon.log"
-uv run python scripts/install_service.py --uninstall
-```
-
-Uninstall stops automatic startup but preserves credentials, runtime files,
-and state. `--prepare-only` builds a separate runtime and plist without
-replacing the running client. There is no `--mode` installer flag.
+Follow the [client setup guide](docs/connect-client.md) to pair your Mac or Daytona worker. The [server deployment guide](docs/client-server-deployment.md) covers hosting, migration and rollback. The server holds the Slack credentials. Clients connect outbound and keep their own agent sign-ins.
 
 For a new Slack app installation, use `slack-manifest.json` and put the variables
 from `.env.example` in the server's private `.env`, never on the Mac client.
