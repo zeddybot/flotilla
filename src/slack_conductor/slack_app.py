@@ -106,7 +106,7 @@ class Bridge:
                     render(
                         "attention",
                         f"Please follow up in the [original thread]({notice['permalink']}) "
-                        "and mention @Conductor there. This DM is a notification.",
+                        f"and mention <@{self.bot_id}> there. This DM is a notification.",
                     ),
                     f"notice-reply:{key}",
                 )
@@ -189,7 +189,7 @@ class Bridge:
             ):
                 self.slack.edit(
                     self.store.status(status_id),
-                    render("reconnecting", "Your message is saved; waiting for Conductor."),
+                    render("reconnecting", "Your message is saved; waiting for the client."),
                 )
         except Exception as exc:
             log.exception("Slack event action failed: %s", key)
