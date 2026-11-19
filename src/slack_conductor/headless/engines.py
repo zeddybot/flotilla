@@ -2,6 +2,7 @@
 
 import json
 
+from ..claude_events import translate
 from ..runtime import Unsupported
 from .permissions import validate
 
@@ -20,6 +21,7 @@ def command(config, engine, native_id, prompt, *, first=False, spec=None):
             "--output-format",
             "stream-json",
             "--verbose",
+            "--include-partial-messages",
             "--permission-mode",
             {
                 "read-only": "plan",
@@ -80,57 +82,21 @@ def decode(engine, line):
                     return None, {"kind": "update", "parts": [{"kind": "output", "text": text}]}
             if item.get("type") in {"command_execution", "file_change", "mcp_tool_call"}:
                 name = item.get("type")
-                detail = item.get("command") or item.get("title") or name
                 return None, {
                     "kind": "update",
                     "parts": [
                         {
                             "kind": "tool",
                             "name": name,
-                            "summary": str(detail)[:120],
-                            "description": str(detail)[:120],
+                            "summary": name,
+                            "description": name,
                         }
                     ],
                 }
         return None, None
     if engine == "claude":
-        if kind == "system" and source.get("subtype") in {"task_started", "task_notification"}:
-            return source.get("session_id"), {
-                "kind": "job_started" if source["subtype"] == "task_started" else "job_finished",
-                "job_id": source.get("task_id"),
-                "status": source.get("status"),
-                "description": source.get("description"),
-            }
-        if kind == "system" and source.get("subtype") == "init":
-            return source.get("session_id"), {"kind": "started"}
-        if kind == "result":
-            return source.get("session_id"), {
-                "kind": "result",
-                "text": source.get("result") or "",
-                "error": bool(source.get("is_error")),
-            }
-        if kind == "assistant":
-            parts = []
-            nested = bool(source.get("parent_tool_use_id"))
-            for block in source.get("message", {}).get("content", []):
-                if not isinstance(block, dict):
-                    continue
-                if block.get("type") == "text" and block.get("text"):
-                    parts.append({"kind": "output", "text": block["text"]})
-                elif block.get("type") == "tool_use":
-                    name = block.get("name", "tool")
-                    parts.append(
-                        {"kind": "tool", "name": name, "summary": name, "description": name}
-                    )
-                    if name in {"AskUserQuestion", "ExitPlanMode"}:
-                        parts.append(
-                            {"kind": "question", "description": "Input required in a terminal"}
-                        )
-            if parts:
-                return source.get("session_id"), {
-                    "kind": "update",
-                    "parts": [] if nested else parts,
-                    "nested": nested,
-                }
-        return source.get("session_id"), None
+        event = translate(source)
+        if event and (event.get("foreign") or event.get("nested")):
+            return None, None
+        return source.get("session_id"), event
     return None, None

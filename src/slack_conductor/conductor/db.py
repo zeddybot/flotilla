@@ -3,6 +3,7 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
+from ..runtime_events import classify as classify_event
 from .events import normalize
 
 
@@ -135,32 +136,4 @@ class ConductorDB:
 
 
 def classify(row):
-    if row["role"] != "assistant":
-        return []
-    try:
-        obj = json.loads(row["content"])
-    except (ValueError, TypeError):
-        return []
-    if not isinstance(obj, dict) or obj.get("parent_tool_use_id"):
-        return []
-    kind, subtype = obj.get("type"), obj.get("subtype")
-    if kind == "result":
-        if obj.get("conductor_sdk_metadata", {}).get("isForeignResult"):
-            return []
-        result = obj.get("result") or "Agent finished without a text reply."
-        return [("result", ("error: " if obj.get("is_error") else "") + str(result))]
-    if kind == "system" and subtype == "init":
-        return [("status", "starting agent")]
-    if kind == "system" and subtype == "task_started":
-        return [("status", obj.get("description", "working"))]
-    output = []
-    if kind == "assistant":
-        for block in obj.get("message", {}).get("content", []):
-            if not isinstance(block, dict):
-                continue
-            if block.get("type") == "thinking":
-                output.append(("status", "thinking"))
-            elif block.get("type") == "tool_use":
-                arg = next((v for v in block.get("input", {}).values() if isinstance(v, str)), "")
-                output.append(("tool", f"{block.get('name', 'tool')}: {arg[:60]}"))
-    return output
+    return classify_event(normalize(row))
