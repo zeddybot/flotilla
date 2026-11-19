@@ -34,10 +34,18 @@ class Notifications:
                     prompt = prompt.partition("\n\n")[2]
                 title = " ".join(prompt.split())[:120] or "Flotilla session"
                 key = str(uuid.uuid5(uuid.NAMESPACE_URL, f"notice:{row['event_key']}:{seq}"))
+                recipient = self.owner_id
+                if phase in {"done", "failed"}:
+                    event = conn.execute(
+                        "SELECT json_extract(payload,'$.user') FROM events WHERE key=?",
+                        (row["event_key"],),
+                    ).fetchone()
+                    if event and event[0]:
+                        recipient = event[0]
                 conn.execute(
                     "INSERT OR IGNORE INTO notifications "
                     "(key,status_id,owner_id,phase,title,detail) VALUES (?,?,?,?,?,?)",
-                    (key, row["id"], self.owner_id, phase, title, detail),
+                    (key, row["id"], recipient, phase, title, detail),
                 )
 
     def save(self, row, **values):
@@ -48,18 +56,18 @@ class Notifications:
         row.update(values)
 
     def reply_target(self, channel, thread_ts, *, actor=None):
-        if actor is not None and actor != self.owner_id:
-            return None
+        recipient = actor if actor is not None else self.owner_id
         rows = self.store.rows(
             "SELECT * FROM notifications WHERE dm_channel=? AND dm_ts=? AND owner_id=?",
-            (channel, thread_ts, self.owner_id),
+            (channel, thread_ts, recipient),
         )
         if rows:
             return rows[0]
         # A user can reply after Slack accepted a DM but before we saved its ts.
         pending = self.store.rows(
-            "SELECT * FROM notifications WHERE state='sending' AND owner_id=?",
-            (self.owner_id,),
+            "SELECT * FROM notifications WHERE state='sending' AND owner_id=? "
+            "AND (dm_channel IS NULL OR dm_channel=?)",
+            (recipient, channel),
         )
         if channel.startswith("D") and pending:
             response = self.slack.call(
@@ -82,13 +90,14 @@ class Notifications:
         """Slack's own bot-message echo can recover a lost first-DM response."""
         if not str(event.get("channel", "")).startswith("D") or not event.get("ts"):
             return
-        ids = {b.get("block_id") for b in event.get("blocks", [])}
-        for row in self.store.rows(
-            "SELECT * FROM notifications WHERE state='sending' AND owner_id=?",
-            (self.owner_id,),
-        ):
-            if f"notice:{row['key']}" in ids:
-                self.save(row, state="sent", dm_channel=event["channel"], dm_ts=event["ts"])
+        for block in event.get("blocks", []):
+            prefix, _, key = (block.get("block_id") or "").partition(":")
+            if prefix == "notice" and key:
+                self.store.execute(
+                    "UPDATE notifications SET state='sent',dm_channel=?,dm_ts=? "
+                    "WHERE key=? AND state='sending' AND (dm_channel IS NULL OR dm_channel=?)",
+                    (event["channel"], event["ts"], key, event["channel"]),
+                )
 
     def known_dm(self, owner):
         rows = self.store.rows(
@@ -156,7 +165,7 @@ class Notifications:
             self.save(row, dm_channel=self.known_dm(row["owner_id"]))
         if row["state"] == "sending":
             if not row["dm_channel"]:
-                raise RuntimeError("Awaiting the owner's DM identity to reconcile delivery")
+                raise RuntimeError("Awaiting the recipient's DM identity to reconcile delivery")
             if ts := self.find_sent(row):
                 self.save(row, state="sent", dm_ts=ts)
                 return
