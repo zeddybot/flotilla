@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -40,7 +41,7 @@ def _parser():
         actions = group.add_subparsers(dest="action", required=True, parser_class=Parser)
         allowed = ("run", "start", "stop", "restart", "status", "logs")
         if host == "client":
-            allowed += ("install", "uninstall")
+            allowed += ("install", "uninstall", "connect")
         for action in allowed:
             child = actions.add_parser(action)
             if action == "logs":
@@ -48,6 +49,22 @@ def _parser():
                 child.add_argument("--lines", type=int, default=50)
             elif host == "client" and action == "install":
                 child.add_argument("--prepare-only", action="store_true")
+            elif host == "client" and action == "connect":
+                child.add_argument("server", nargs="?", help="server WebSocket URL")
+                child.add_argument("--server-url", help="server WebSocket URL")
+                child.add_argument("--profile", help="name shown in Slack")
+                child.add_argument("--runtime-adapter", choices=("conductor", "headless"))
+                child.add_argument("--repo", type=Path, help="repository (defaults to cwd)")
+                child.add_argument("--workspace-root", type=Path)
+                child.add_argument("--state-dir", type=Path)
+                child.add_argument("--engine", choices=("claude", "codex"))
+                child.add_argument(
+                    "--engine-permission-policy",
+                    choices=("read-only", "workspace-write", "external-sandbox"),
+                )
+                child.add_argument(
+                    "--check", action="store_true", help="finish after Slack confirms"
+                )
     session = commands.add_parser("session")
     actions = session.add_subparsers(dest="action", required=True, parser_class=Parser)
     actions.add_parser("list")
@@ -149,6 +166,26 @@ def _dispatch(args, root, config):
             raise CLIError("Doctor found unhealthy components: " + json.dumps(result), "unhealthy")
         return result
     if args.command in {"server", "client"}:
+        if args.action == "connect":
+            from .cli_pairing import begin_pairing, finish_pairing
+
+            if args.check:
+                if any(
+                    (
+                        args.server,
+                        args.server_url,
+                        args.profile,
+                        args.runtime_adapter,
+                        args.repo,
+                        args.workspace_root,
+                        args.state_dir,
+                        args.engine,
+                        args.engine_permission_policy,
+                    )
+                ):
+                    raise CLIError("--check takes only the config root", "usage_error")
+                return finish_pairing(root)
+            return begin_pairing(root, args)
         from . import service_manager as service
 
         if args.action == "logs":
@@ -234,16 +271,16 @@ def main(argv=None):
             raise CLIError("--json is unavailable while following raw logs", "usage_error")
         if args.command == "monitor" and args.interval < 5:
             raise CLIError("--interval must be at least 5 seconds", "usage_error")
-        root = (
-            (
-                args.root.expanduser().resolve()
-                if args.root is not None
-                else Path.home() / ".config/flotilla"
+        pairing = args.command == "client" and args.action == "connect"
+        if pairing:
+            root = discover_root(
+                args.root or Path(os.environ.get("FLOTILLA_CONFIG_DIR", "~/.config/flotilla"))
             )
-            if args.command == "init"
-            else discover_root(args.root)
-        )
-        config = None if args.command == "init" else load_config(root)
+        elif args.command == "init":
+            root = (args.root or Path.home() / ".config/flotilla").expanduser().resolve()
+        else:
+            root = discover_root(args.root)
+        config = None if args.command == "init" or pairing else load_config(root)
         if args.command == "session" and args.action == "tail":
             events = _dispatch(args, root, config)
             if args.follow:
