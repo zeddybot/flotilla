@@ -6,14 +6,63 @@ import hashlib
 import json
 import logging
 import os
+import re
 
 from . import remote_files
 from .conductor.journal import Unconfirmed
+from .file_links import references
 from .remote_files import CHUNK_BYTES
 from .uploads import MAX_BYTES, MAX_FILES, Uploads
 
 AssetSource = remote_files.AssetSource
 log = logging.getLogger(__name__)
+
+
+def receive_plan(reply, content):
+    """Build server-owned upload state from the client's attachment descriptors."""
+    text = content.replace("\r\n", "\n").replace("\r", "\n")
+    if not isinstance(reply, dict) or reply.get("text") != text:
+        raise ValueError("file manifest does not match the answer")
+    spans = {(r["start"], r["end"]): r for r in references(text)}
+    refs, files = [], []
+    if not isinstance(reply.get("files"), list) or len(reply["files"]) > len(spans):
+        raise ValueError("unexpected number of attachment descriptors")
+    for index, item in enumerate(reply["files"]):
+        name = item["name"]
+        if not isinstance(name, str) or not name:
+            raise ValueError("invalid attachment name")
+        error = item.get("error")
+        if isinstance(error, str) and error:
+            files.append({"name": name, "error": error})
+            continue
+        length = item["length"]
+        if index >= MAX_FILES or type(length) is not int or not 0 <= length <= MAX_BYTES:
+            raise ValueError("invalid attachment size")
+        if not all(
+            re.fullmatch(r"[a-f0-9]{64}", item[key]) for key in ("digest", "remote_snapshot")
+        ):
+            raise ValueError("invalid attachment identity")
+        files.append(
+            {
+                "name": name,
+                "length": length,
+                "phase": "new",
+                "image": item.get("image") is True,
+                "digest": item["digest"],
+                "remote_snapshot": item["remote_snapshot"],
+            }
+        )
+    end = 0
+    for ref in reply["refs"]:
+        original = spans[(ref["start"], ref["end"])]
+        index = ref["file"]
+        if type(index) is not int or not 0 <= index < len(files) or original["start"] < end:
+            raise ValueError("invalid attachment reference")
+        refs.append({**original, "file": index})
+        end = original["end"]
+    if {ref["file"] for ref in refs} != set(range(len(files))):
+        raise ValueError("unreferenced attachment")
+    return {"text": text, "refs": refs, "files": files}
 
 
 class RemoteUploads(Uploads):
@@ -45,17 +94,15 @@ class RemoteUploads(Uploads):
             )
         except (OSError, TimeoutError, ConnectionError) as exc:
             raise Unconfirmed("Mac client unavailable while preparing files") from exc
-        # Uploads.prepare keeps refs beyond the limit as error entries so the
-        # answer can still be delivered with the first ten files attached.
-        if sum(bool(item.get("remote_snapshot")) for item in plan["files"]) > MAX_FILES:
-            raise ValueError("remote file plan exceeds file limit")
-        for item in plan["files"]:
-            if item.get("remote_snapshot") and (
-                not isinstance(item.get("length"), int)
-                or item["length"] > MAX_BYTES
-                or item["length"] < 0
-            ):
-                raise ValueError("remote file exceeds size limit")
+        try:
+            plan = receive_plan(plan, status["result"])
+        except (KeyError, TypeError, ValueError):
+            # Deliver the original text even if the client returned an invalid manifest.
+            plan = {
+                "text": status["result"],
+                "refs": [],
+                "files": [{"name": "attachments", "error": "invalid attachment manifest"}],
+            }
         self.save(status, plan)
         return plan
 
