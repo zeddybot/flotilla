@@ -15,7 +15,7 @@ def test_tokens_are_leading_case_insensitive_and_sticky():
         "<@B> [ASTRA][MAX][fast][queue] fix &lt;x&gt; [close]", "B", Config()
     )
     assert text == "fix <x> [close]"
-    assert options["model"] == "GPT-6 Astra" and options["effort"] == "max" and options["fast"]
+    assert options["model"] == "GPT-6.2 Astra" and options["effort"] == "max" and options["fast"]
     assert command is None
     assert parse("next", "B", Config(), options)[1] == options
     assert parse("[unknown] test", "B", Config())[0] == "[unknown] test"
@@ -33,8 +33,8 @@ def test_default_steering_and_explicit_queue_override():
     for token, label in {
         "fable": "Fable 5.2",
         "haiku": "Haiku 5.5",
-        "astra": "GPT-6 Astra",
-        "sol": "GPT-6.1 Sol",
+        "astra": "GPT-6.2 Astra",
+        "sol": "GPT-6.2 Sol",
         "sonnet": "Sonnet 5.5",
         "terra": "GPT-5.6 Terra",
         "luna": "GPT-6 Luna",

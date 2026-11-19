@@ -233,8 +233,8 @@ def test_creation_recovers_returned_identity_from_durable_receipt(
         ("opus", "opus-5-5-1m", "claude"),
         ("sonnet", "sonnet-5-5-1m", "claude"),
         ("haiku", "haiku-5-5-1m", "claude"),
-        ("astra", "gpt-6-astra", "codex"),
-        ("sol", "gpt-6.1-sol", "codex"),
+        ("astra", "gpt-6.2-astra", "codex"),
+        ("sol", "gpt-6.2-sol", "codex"),
         ("terra", "gpt-5.6-terra", "codex"),
         ("luna", "gpt-6-luna", "codex"),
         ("alpha", "opencode:opencode/union-alpha", "acp"),
@@ -248,6 +248,25 @@ def test_configured_aliases_select_the_expected_engine_and_model(alias, expected
     assert not warning
     assert config["model"] == expected
     assert config["agent"] == agent
+
+
+@pytest.mark.parametrize(
+    ("label", "model"),
+    [
+        ("GPT-6.2 Astra", "gpt-6.2-astra"),
+        ("GPT-6.2 Sol", "gpt-6.2-sol"),
+        ("GPT-6 Astra", "gpt-6-astra"),
+        ("GPT-6.1 Sol", "gpt-6.1-sol"),
+    ],
+)
+def test_codex_aliases_and_historical_labels_accept_fast_and_ultra(label, model):
+    config, warning = configuration(
+        {"model": label, "effort": "ultra", "fast": True}, Config().model
+    )
+    assert (config, warning) == (
+        {"agent": "codex", "model": model, "thinkingLevel": "ultra", "fastMode": True},
+        "",
+    )
 
 
 @pytest.mark.parametrize(

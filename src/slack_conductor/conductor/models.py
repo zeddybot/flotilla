@@ -11,6 +11,8 @@ MODELS = {
     "GPT-6 Astra": "gpt-6-astra",
     "GPT-6 Sol": "gpt-6-sol",
     "GPT-6.1 Sol": "gpt-6.1-sol",
+    "GPT-6.2 Astra": "gpt-6.2-astra",
+    "GPT-6.2 Sol": "gpt-6.2-sol",
     "GPT-5.6 Terra": "gpt-5.6-terra",
     "GPT-6 Luna": "gpt-6-luna",
     "Union Alpha Free": "opencode:opencode/union-alpha",
@@ -32,7 +34,14 @@ def configuration(options, default):
     levels = ["low", "medium", "high", "xhigh", "max"]
     if model in ("fable-5-1", "fable-5-2", "opus-5-5-1m"):
         levels.append("ultracode")
-    elif model in ("gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-5.6-terra"):
+    elif model in (
+        "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6.1-sol",
+        "gpt-6.2-astra",
+        "gpt-6.2-sol",
+        "gpt-5.6-terra",
+    ):
         levels.append("ultra")
     effort = options["effort"]
     if model == "haiku-4-5" or model.startswith("opencode:"):
