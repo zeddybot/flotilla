@@ -22,9 +22,10 @@ class Config:
     server_host: str = "127.0.0.1"
     server_port: int = 8765
     client_id: str = "mac"
+    pairing_allowed_users: list[str] = field(default_factory=list)
     remote_token_file: Path | None = None
-    repo: Path = Path("/Users/sameer/Documents/work/prodex/ttd")
-    workspace_root: Path = Path.home() / "conductor/workspaces/ttd"
+    repo: Path = field(default_factory=Path.cwd)
+    workspace_root: Path | None = None
     conductor_db: Path = Path.home() / "Library/Application Support/com.conductor.app/conductor.db"
     state_dir: Path = Path.home() / "Library/Application Support/slack-conductor"
     model: str = "Fable 5.2"
@@ -43,6 +44,10 @@ class Config:
             "alpha": "Union Alpha Free",
         }
     )
+
+    def __post_init__(self):
+        if self.workspace_root is None:
+            self.workspace_root = Path.home() / "conductor/workspaces" / self.repo.name
 
     @classmethod
     def load(cls, root: Path):
@@ -71,21 +76,31 @@ class Config:
             raise ValueError("server_port must be between 1 and 65535")
         if not cfg.client_id:
             raise ValueError("client_id must not be empty")
+        if not isinstance(cfg.pairing_allowed_users, list) or any(
+            not isinstance(user_id, str) or not re.fullmatch(r"[UW][A-Z0-9]+", user_id)
+            for user_id in cfg.pairing_allowed_users
+        ):
+            raise ValueError("pairing_allowed_users must be a list of Slack user IDs")
         cfg.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         return cfg
 
 
+def validate_server_url(server_url: str):
+    url = urlsplit(server_url)
+    localhost = url.hostname in {"localhost", "127.0.0.1", "::1"}
+    if url.scheme != "wss" and not (url.scheme == "ws" and localhost):
+        raise ValueError("server_url must use wss (ws is allowed only for localhost)")
+    if not url.netloc or url.username or url.password or url.fragment:
+        raise ValueError("server_url must be a websocket URL without credentials or fragment")
+    return url
+
+
 def remote_credentials(config: Config) -> str:
-    """Read the private shared secret used by the remote server and Mac client."""
+    """Read the private remote bearer."""
     if config.mode not in {"server", "client"}:
         raise ValueError("remote credentials require server or client mode")
     if config.mode == "client":
-        url = urlsplit(config.server_url)
-        localhost = url.hostname in {"localhost", "127.0.0.1", "::1"}
-        if url.scheme != "wss" and not (url.scheme == "ws" and localhost):
-            raise ValueError("server_url must use wss (ws is allowed only for localhost)")
-        if not url.netloc or url.username or url.password or url.fragment:
-            raise ValueError("server_url must be a websocket URL without credentials or fragment")
+        validate_server_url(config.server_url)
     if config.remote_token_file is None:
         raise RuntimeError("remote_token_file is required")
     path = config.remote_token_file
