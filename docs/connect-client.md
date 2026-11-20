@@ -4,7 +4,7 @@ Ask the Slack app operator for the server’s WebSocket URL and the release revi
 
 ## Pair a Mac
 
-Open Conductor, add the repository you want the agent to work in, and sign in to the agent you plan to use. You’ll need Git and uv. Clone the Flotilla repository and check out the revision your operator supplied. Run these commands from the Flotilla checkout. Substitute your server address and the absolute path of the repository you added to Conductor.
+Open Conductor, add the repository you want the agent to work in, and sign in to the agent you plan to use. You’ll need Git and uv. Clone the [Flotilla repository](https://github.com/zeddybot/flotilla) and check out the revision your operator supplied. Run these commands from the Flotilla checkout. Substitute your server address and the absolute path of the repository you added to Conductor.
 
 ```sh
 uv sync --frozen

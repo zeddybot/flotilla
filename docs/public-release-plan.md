@@ -1,8 +1,7 @@
-# Public release preparation: plan only
+# Public release preparation
 
-The repository stays private. This change does not alter GitHub settings, enable
-public distribution, rename the Slack app, or install a new ruleset. Local CI is
-the current qualification path while private Actions billing is unavailable.
+These checks cover publishing Flotilla's source, qualifying a release, and
+supporting users who install it.
 
 Before a public release:
 
@@ -22,15 +21,12 @@ Before a public release:
   requires a checkout or bundled installed runtime and `uv`.
 - Document public support boundaries, known capability gaps, contributor setup,
   issue reporting without secrets, and a minimal changelog/release process.
-- Decide the GitHub Actions budget and required merge checks. Verify the actual
-  ruleset when enabled; a checked-in ruleset JSON is not enforced protection.
-  Public repository availability does not remove the need to inspect account
-  limits, permissions, runner availability, and check configuration.
+- Confirm hosted GitHub Actions results for the release revision. Inspect the
+  active ruleset, account limits, permissions, and runner availability.
 - Run the supported OS/Python matrix, packaging checks, secret scans, and a
   disposable end-to-end release exercise on the exact release revision. Record
   what was actually tested and what remains unqualified.
 
-Publish only after a separate explicit decision covering repository visibility,
-history handling, distribution, and any Slack app/product rebrand. Other clients,
-new hosts, multiplayer, and billing are not prerequisites for a small public
-single-owner release if limitations are clearly documented.
+Record the decisions on repository visibility, history handling, and distribution
+before publishing. Document the clients, hosts, and workflows the release
+supports.
