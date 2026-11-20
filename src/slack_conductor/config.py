@@ -39,7 +39,7 @@ class Config:
             "fable": "Fable 5.2",
             "astra": "GPT-6.2 Astra",
             "sol": "GPT-6.2 Sol",
-            "terra": "GPT-5.6 Terra",
+            "terra": "GPT-6.1 Terra",
             "luna": "GPT-6 Luna",
             "alpha": "Union Alpha Free",
         }

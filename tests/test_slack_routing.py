@@ -309,7 +309,12 @@ def test_first_headless_prompt_uses_client_settings(
     [
         ("[sol][codex]", "codex", "gpt-6.2-sol"),
         ("[astra]", "codex", "gpt-6.2-astra"),
-        ("[claude][opus]", "claude", "opus"),
+        ("[claude][opus]", "claude", "claude-opus-5-5[1m]"),
+        ("[sonnet]", "claude", "claude-sonnet-5-5[1m]"),
+        ("[haiku]", "claude", "claude-haiku-5-5[1m]"),
+        ("[fable]", "claude", "claude-fable-5-2"),
+        ("[luna]", "codex", "gpt-6-luna"),
+        ("[terra]", "codex", "gpt-6.1-terra"),
         ("[model:claude-sonnet-4-6]", "claude", "claude-sonnet-4-6"),
     ],
 )

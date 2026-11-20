@@ -235,7 +235,7 @@ def test_creation_recovers_returned_identity_from_durable_receipt(
         ("haiku", "haiku-5-5-1m", "claude"),
         ("astra", "gpt-6.2-astra", "codex"),
         ("sol", "gpt-6.2-sol", "codex"),
-        ("terra", "gpt-5.6-terra", "codex"),
+        ("terra", "gpt-6.1-terra", "codex"),
         ("luna", "gpt-6-luna", "codex"),
         ("alpha", "opencode:opencode/union-alpha", "acp"),
     ],
@@ -257,6 +257,8 @@ def test_configured_aliases_select_the_expected_engine_and_model(alias, expected
         ("GPT-6.2 Sol", "gpt-6.2-sol"),
         ("GPT-6 Astra", "gpt-6-astra"),
         ("GPT-6.1 Sol", "gpt-6.1-sol"),
+        ("GPT-6.1 Terra", "gpt-6.1-terra"),
+        ("GPT-5.6 Terra", "gpt-5.6-terra"),
     ],
 )
 def test_codex_aliases_and_historical_labels_accept_fast_and_ultra(label, model):

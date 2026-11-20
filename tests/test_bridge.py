@@ -36,7 +36,7 @@ def test_slack_send_mode_depends_on_the_message():
         "astra": "GPT-6.2 Astra",
         "sol": "GPT-6.2 Sol",
         "sonnet": "Sonnet 5.5",
-        "terra": "GPT-5.6 Terra",
+        "terra": "GPT-6.1 Terra",
         "luna": "GPT-6 Luna",
     }.items():
         assert parse(f"[{token}] go", "B", config)[1]["model"] == label

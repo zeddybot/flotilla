@@ -4,9 +4,12 @@ import re
 EFFORTS = {"low", "medium", "high", "xhigh", "max", "ultracode"}
 HEADLESS_ENGINES = {"claude", "codex"}
 HEADLESS_ALIASES = {
-    "opus": ("claude", "opus"),
-    "sonnet": ("claude", "sonnet"),
-    "haiku": ("claude", "haiku"),
+    "opus": ("claude", "claude-opus-5-5[1m]"),
+    "sonnet": ("claude", "claude-sonnet-5-5[1m]"),
+    "haiku": ("claude", "claude-haiku-5-5[1m]"),
+    "fable": ("claude", "claude-fable-5-2"),
+    "luna": ("codex", "gpt-6-luna"),
+    "terra": ("codex", "gpt-6.1-terra"),
     "sol": ("codex", "gpt-6.2-sol"),
     "astra": ("codex", "gpt-6.2-astra"),
 }

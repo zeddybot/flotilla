@@ -54,11 +54,11 @@ Mention `@flotilla` in a channel where the app is a member. For example, `@floti
 
 The first registered person to summon Flotilla owns the session. Other registered people in the thread can send prompts that run with the owner’s agent credentials and repository access. Only the owner can respond to approvals or questions, interrupt work, close the session, or start a replacement. An offline client keeps its outstanding requests. Existing threads keep their original client when you change your default.
 
-DM `profiles` to list your clients, `default mac` to choose the default for new threads, or `disconnect daytona` to disconnect that credential. Use `[questions]` in the original thread to see outstanding requests. Flotilla sends the details to the owner privately. On a headless profile, `[sol]` requests GPT-6.2 Sol and `[astra]` requests GPT-6.2 Astra through Codex. Availability depends on the signed-in account. `[opus]`, `[sonnet]` and `[haiku]` select Claude. Use `[codex]` or `[claude]` for the engine default, or specify a native model such as `[model:gpt-6.2-sol]`. Choose the engine, model and effort when starting a session. To change them in an existing thread, start a fresh session with `[new]`.
+DM `profiles` to list your clients, `default mac` to choose the default for new threads, or `disconnect daytona` to disconnect that credential. Use `[questions]` in the original thread to see outstanding requests. Flotilla sends the details to the owner privately. Use `[haiku]`, `[sonnet]`, `[opus]`, `[fable]`, `[luna]`, `[terra]`, `[sol]`, or `[astra]` to select a model on a Mac or headless profile. Model availability depends on the signed-in account. On a headless profile you can also specify a native model ID, such as `[model:gpt-6.2-sol]`. Choose the engine, model and effort when starting a session. To change them in an existing thread, start a fresh session with `[new]`.
 
 ```text
-@flotilla [profile:daytona][codex][high] investigate the failing test
-@flotilla [steer] check the timestamp parsing before changing the test
+@flotilla [profile:daytona][sol][high] investigate the failing test
+@flotilla check the timestamp parsing before changing the test
 @flotilla [queue] run the focused tests after that
 @flotilla [new][opus] inspect the fix in a fresh workspace
 ```
