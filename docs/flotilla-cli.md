@@ -1,10 +1,12 @@
-# Flotilla CLI (single-owner pilot)
+# Flotilla CLI
 
 `flotilla` operates the existing private server and Mac client on the **current host**. It does not administer a remote Daytona sandbox from your Mac. The `sc` command and the existing Slack app remain available.
 
 For an existing installation, upgrade the server and client together: this client cannot connect to the older server protocol. Follow the [coordinated upgrade procedure](runtime-interface.md#coordinated-upgrade) before activating the new Mac service.
 
-## First install on the Mac
+For a new personal profile, follow the [client pairing guide](connect-client.md).
+
+## Bootstrap the first Mac with an operator-provisioned token
 
 Start from this checkout with `uv` installed. Have the existing server URL, a shared client token file containing at least 32 characters with mode `600`, and your Conductor repository and workspace paths ready.
 
