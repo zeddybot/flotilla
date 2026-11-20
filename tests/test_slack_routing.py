@@ -109,7 +109,7 @@ def test_atomic_first_summoner_routes_to_one_client_and_survives_restart(tmp_pat
     assert endpoints[winner].sent[-1][3]["send_mode"] == "queue"
     assert parse("", "B", bridge.config)[1]["send_mode"] == "steer"
 
-    for ts, control in enumerate(["stop", "close", "questions", "deny:id", "new", "queue"], 5):
+    for ts, control in enumerate(["stop", "close", "questions", "deny:id", "new", "verbose"], 5):
         assert reboot.receive(event(guest, str(ts), f"<@B> [{control}] text", thread="1"))
         target.process(target.store.next_event())
     assert not endpoints[winner].mutations
