@@ -4,6 +4,8 @@ from dataclasses import replace
 from threading import Barrier
 from types import SimpleNamespace
 
+import pytest
+
 from slack_conductor.conductor.journal import Unconfirmed
 from slack_conductor.config import Config
 from slack_conductor.headless.runtime import HeadlessRuntime
@@ -75,6 +77,105 @@ def event(user, ts, text, *, thread=None, direct=False):
     if thread:
         message["thread_ts"] = thread
     return {"team_id": "T1", "event": message}
+
+
+def connector_dm(ts, text, *, formatted=False):
+    attribution = "*Sent using* <@UAPP>"
+    visible = f"`{text}`" if formatted else text
+    body = event("U2", ts, f"{visible} {attribution}", direct=True)
+    element = {"type": "text", "text": text}
+    if formatted:
+        element["style"] = {"code": True}
+    body["event"]["blocks"] = [
+        {
+            "type": "rich_text",
+            "block_id": "body",
+            "elements": [{"type": "rich_text_section", "elements": [element]}],
+        },
+        {
+            "type": "context",
+            "block_id": "attribution",
+            "elements": [{"type": "mrkdwn", "text": attribution, "verbatim": False}],
+        },
+    ]
+    return body
+
+
+@pytest.mark.parametrize("message_shape", ["connector", "code", "plain"])
+def test_direct_profile_commands_with_connector_attribution(tmp_path, message_shape):
+    bridge, _ = setup(tmp_path)
+
+    def for_client(client_id):
+        state_dir = tmp_path / "clients" / client_id
+        state_dir.mkdir(parents=True)
+        return endpoint(replace(bridge.config, state_dir=state_dir))
+
+    bridge.conductor.for_client = for_client
+    pairs = bridge.conductor.pairing
+    code = "a" * 32
+    pairs.register(code, hashlib.sha256(code.encode()).hexdigest(), "daytona", "conductor")
+    router = Routing(bridge)
+
+    def command(ts, text):
+        body = (
+            event("U2", ts, text, direct=True)
+            if message_shape == "plain"
+            else connector_dm(ts, text, formatted=message_shape == "code")
+        )
+        assert not router.receive(body)
+        assert bridge.store.next_event() is None
+        return bridge.slack.posts[-1][2]
+
+    assert command("1", f"connect {code}").startswith("Connected `daytona`")
+    assert "`daytona` (conductor)" in command("2", "profiles")
+    assert command("3", "default daytona") == "`daytona` is your default for new threads."
+    assert command("4", "disconnect daytona") == "Disconnected `daytona`."
+    assert pairs.profiles("T1", "U2") == []
+
+
+@pytest.mark.parametrize(
+    "source, invalid",
+    [
+        ("socket", "extra_prose"),
+        ("socket", "fallback_prose"),
+        ("socket", "code_fallback_prose"),
+        ("socket", "quoted"),
+        ("socket", "forwarded"),
+        ("socket", "public"),
+        ("socket", "public_connector"),
+        ("socket", "public_code_connector"),
+        ("history", None),
+    ],
+)
+def test_pairing_rejects_noncommands_and_nonlive_direct_messages(tmp_path, source, invalid):
+    bridge, _ = setup(tmp_path)
+    pairs = bridge.conductor.pairing
+    code = "a" * 32
+    pairs.register(code, hashlib.sha256(code.encode()).hexdigest(), "daytona", "conductor")
+    text = f"connect {code}"
+    body = connector_dm(
+        "1",
+        text + " extra prose" if invalid == "extra_prose" else text,
+        formatted=invalid in ("code_fallback_prose", "public_code_connector"),
+    )
+    message = body["event"]
+    if invalid in ("fallback_prose", "code_fallback_prose"):
+        message["user"] = "U1"
+        message["text"] += " extra prose"
+    elif invalid == "quoted":
+        message["blocks"][0]["elements"][0]["type"] = "rich_text_quote"
+        message["text"] = text
+    elif invalid == "forwarded":
+        message["attachments"] = [{"is_msg_unfurl": True}]
+        message["text"] = text
+    elif invalid in ("public", "public_connector", "public_code_connector"):
+        body = event("U1", "1", f"<@B> {text if invalid == 'public' else message['text']}")
+
+    assert not Routing(bridge).receive(body, source=source)
+    assert pairs.profiles("T1", "U2") == []
+    assert pairs.profiles("T1", "U1") == []
+    assert bridge.store.next_event() is None
+    assert all(code not in post[2] for post in bridge.slack.posts)
 
 
 def test_atomic_first_summoner_routes_to_one_client_and_survives_restart(tmp_path):

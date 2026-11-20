@@ -1,5 +1,6 @@
 """Resolve Slack people and immutable thread routes before enqueueing prompts."""
 
+import re
 import threading
 from dataclasses import replace
 
@@ -15,6 +16,61 @@ CONNECT_GUIDE = (
     "run `flotilla client connect`, then DM me `connect <code>`."
 )
 LEGACY_NAME = "mac"
+CONNECTOR_ATTRIBUTION = re.compile(r"\*Sent using\* <@[UW][A-Z0-9]+>")
+
+
+def direct_command_text(event, fallback):
+    """Verify a plain DM body and any Slack connector attribution in its fallback."""
+    if event.get("type") != "message" or event.get("attachments") or event.get("files"):
+        return None
+    if not event.get("blocks"):
+        return fallback
+    try:
+        body, *context = event["blocks"]
+        (section,) = body["elements"]
+        (element,) = section["elements"]
+        if (body["type"], section["type"], element["type"]) != (
+            "rich_text",
+            "rich_text_section",
+            "text",
+        ):
+            return None
+        style = element.get("style", {})
+        if style not in ({}, {"code": True}):
+            return None
+        text = element["text"].strip()
+        attributions = []
+        for block in context:
+            (attribution,) = block["elements"]
+            if (
+                block["type"] != "context"
+                or attribution["type"] != "mrkdwn"
+                or not CONNECTOR_ATTRIBUTION.fullmatch(attribution["text"])
+            ):
+                return None
+            attributions.append(attribution["text"])
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+
+    rendered = f"`{text}`" if style else text
+    for candidate in (text, rendered):
+        if not fallback.startswith(candidate):
+            continue
+        tail = fallback[len(candidate) :]
+        if (not attributions and not tail) or (
+            attributions and tail[:1].isspace() and tail.split() == " ".join(attributions).split()
+        ):
+            return text
+    return None
+
+
+def contains_pairing_command(text):
+    parts = text.removeprefix("`").split(maxsplit=2)
+    return (
+        len(parts) >= 2
+        and parts[0].lower() == "connect"
+        and PAIR_CODE.fullmatch(parts[1].removesuffix("`")) is not None
+    )
 
 
 class Routing:
@@ -136,21 +192,20 @@ class Routing:
         key = f"{self.team_id}:{channel}:{ts}"
         direct = event.get("channel_type") == "im"
         text = event["text"].strip().removeprefix(f"<@{self.bot_id}>").strip()
-        command, _, argument = text.partition(" ")
+        verified_text = direct_command_text(event, text) if direct else None
+        command, _, argument = (verified_text if verified_text is not None else text).partition(" ")
         command = command.lower()
         argument = argument.strip()
-        is_command = (
-            (command == "connect" and (direct or PAIR_CODE.fullmatch(argument)))
-            or (direct and command == "profiles" and not argument)
-            or (
-                direct and command in {"default", "disconnect"} and PROFILE_NAME.fullmatch(argument)
-            )
+        is_command = direct and (
+            command == "connect"
+            or (command == "profiles" and not argument)
+            or (command in {"default", "disconnect"} and PROFILE_NAME.fullmatch(argument))
         )
-        if is_command:
+        if is_command or contains_pairing_command(text):
             # A pairing code must never enter the prompt queue, including when pasted in public.
             if source == "history":
                 return False
-            if not direct:
+            if not is_command or verified_text is None:
                 self.private(user, CONNECT_GUIDE, key)
                 return False
             try:
