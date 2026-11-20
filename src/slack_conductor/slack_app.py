@@ -78,21 +78,47 @@ class Bridge:
             raise ValueError(f"This profile does not support {capability}.")
         return probe
 
-    def check_options(self, options, creating):
-        probe = self.probe(options["send_mode"])
-        if not creating or not probe:
+    def check_options(self, options, session_id=None):
+        if not hasattr(self.conductor, "probe"):
+            if options["send_mode"] is None:
+                options["send_mode"] = "queue"
             return
-        if not probe["capabilities"].get("create"):
-            raise ValueError("This profile does not support create.")
+        probe = self.conductor.probe()
+        capabilities = probe.get("capabilities", {})
         configuration = probe.get("configuration", {})
+        if options["send_mode"] is None:
+            options["send_mode"] = configuration.get("default_send_mode", "queue")
+        if probe.get("adapter") == "headless":
+            if session_id:
+                description = self.conductor.rpc("runtime.describe", {"session_id": session_id})
+                capabilities = description.get("capabilities", capabilities)
+            else:
+                if "engine_capabilities" not in configuration and any(
+                    options.get(key) for key in ("engine", "model", "effort")
+                ):
+                    raise ValueError(
+                        "This headless client needs an upgrade to select an engine, model or effort."
+                    )
+                engine = options.get("engine") or configuration.get("default_engine")
+                if engine and engine not in configuration.get("engines", (engine,)):
+                    raise ValueError(f"This profile does not support the {engine} engine.")
+                capabilities = configuration.get("engine_capabilities", {}).get(
+                    engine, capabilities
+                )
+                efforts = configuration.get("engine_efforts", {}).get(engine)
+                if efforts is not None and options["effort"] and options["effort"] not in efforts:
+                    raise ValueError(f"The {engine} engine does not support this effort level.")
+        if not capabilities.get(options["send_mode"]):
+            target = "session" if session_id and probe.get("adapter") == "headless" else "profile"
+            raise ValueError(f"This {target} does not support {options['send_mode']}.")
+        if session_id:
+            return
+        if not probe.get("capabilities", {}).get("create"):
+            raise ValueError("This profile does not support create.")
         if "models" in configuration and options["model"] not in configuration["models"]:
             raise ValueError("This profile does not support the selected model.")
         if options["fast"] and not configuration.get("fast"):
             raise ValueError("This profile does not support fast mode.")
-        if probe.get("adapter") == "headless" and (options["model"] or options["effort"]):
-            raise ValueError(
-                "Set this profile's headless model and effort in the client configuration."
-            )
 
     def session_control(self, envelope, thread, command, text):
         action, _, question_id = command.partition(":")
@@ -229,10 +255,12 @@ class Bridge:
                 and thread
                 and command != "new"
                 and any(
-                    options.get(name) != previous.get(name, options.get(name))
-                    for name in ("model", "effort", "fast")
+                    options.get(name) != baseline.get(name)
+                    for name in ("engine", "model", "effort", "fast")
                 )
             ):
+                if self.config.runtime_adapter == "headless":
+                    raise ValueError("Use [new] to change the engine, model or effort.")
                 raise ValueError("Use [new] to change the model, effort or fast mode.")
             if thread and thread["state"] == "archived" and command not in {"new", "close"}:
                 raise ValueError("workspace archived; use [new]")
@@ -279,7 +307,13 @@ class Bridge:
                 options = json.loads(saved["options"])
                 prompt = saved["prompt"]
                 if self.routed:
-                    self.check_options(options, not thread or command == "new")
+                    session_id = saved["session_id"]
+                    if not session_id and thread and command != "new":
+                        session_id = thread["session_id"]
+                    needs_default = options["send_mode"] is None
+                    self.check_options(options, session_id)
+                    if needs_default:
+                        self.store.update(status_id, options=json.dumps(options))
                 if saved["workspace_id"]:
                     workspace = self.conductor.validate(saved["workspace_id"], saved["session_id"])
                 elif not thread or command == "new":

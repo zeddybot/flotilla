@@ -2,6 +2,27 @@ import html
 import re
 
 EFFORTS = {"low", "medium", "high", "xhigh", "max", "ultracode"}
+HEADLESS_ENGINES = {"claude", "codex"}
+HEADLESS_ALIASES = {
+    "opus": ("claude", "opus"),
+    "sonnet": ("claude", "sonnet"),
+    "haiku": ("claude", "haiku"),
+    "sol": ("codex", "gpt-6.2-sol"),
+    "astra": ("codex", "gpt-6.2-astra"),
+}
+
+
+def headless_model(token):
+    if token in HEADLESS_ALIASES:
+        return HEADLESS_ALIASES[token]
+    if not token.startswith("model:"):
+        return None
+    model = token.removeprefix("model:")
+    if re.fullmatch(r"claude-[a-z0-9][a-z0-9.-]*", model):
+        return "claude", model
+    if re.fullmatch(r"(?:gpt-[0-9]|o[1-9])[a-z0-9.-]*", model):
+        return "codex", model
+    raise ValueError("Use [model:<native model ID>] with a Claude or Codex model ID.")
 
 
 def profile_selector(text, bot_id):
@@ -17,27 +38,45 @@ def profile_selector(text, bot_id):
 
 def parse(text, bot_id, config, previous=None):
     text = re.sub(rf"^\s*<@{re.escape(bot_id)}>\s*", "", text)
+    headless = config.runtime_adapter == "headless"
     options = {
-        "model": config.model,
-        "effort": config.effort,
+        "model": "" if headless else config.model,
+        "effort": "" if headless else config.effort,
         "fast": False,
-        "send_mode": config.send_mode,
+        "send_mode": None if headless else config.send_mode,
         "verbose": False,
     }
+    if headless:
+        options["engine"] = ""
     if previous:
         options.update({key: previous[key] for key in options if key in previous})
     command = None
+    selectors = {}
     while match := re.match(r"^\s*\[([^\]]+)\]\s*", text):
         raw_token = match[1]
         token = raw_token.lower()
-        if token in config.models:
+        model = headless_model(token) if headless else None
+        if headless and (model or token in HEADLESS_ENGINES):
+            engine = model[0] if model else token
+            if selectors.get("engine", engine) != engine:
+                raise ValueError("Choose one engine and a model for that engine.")
+            selectors["engine"] = engine
+            if model:
+                if selectors.get("model", model[1]) != model[1]:
+                    raise ValueError("Choose one model per session.")
+                selectors["model"] = model[1]
+        elif headless and token in config.models:
+            raise ValueError(f"The [{token}] model alias is only available on Conductor profiles.")
+        elif token in config.models:
             options["model"] = config.models[token]
+        elif headless and (token in EFFORTS or token in {"minimal", "ultra"}):
+            selectors["effort"] = token
         elif token in EFFORTS:
             options["effort"] = token
         elif token in {"fast", "verbose"}:
             options[token] = True
         elif token in {"queue", "steer"}:
-            options["send_mode"] = token
+            selectors["send_mode"] = token
         elif token in {"new", "close", "stop", "questions"} or token.partition(":")[0] in {
             "approve",
             "deny",
@@ -50,6 +89,9 @@ def parse(text, bot_id, config, previous=None):
         else:
             break  # Unknown bracket text belongs to the prompt.
         text = text[match.end() :]
+    if headless and "engine" in selectors and options["engine"] != selectors["engine"]:
+        options.update(model="", effort="", send_mode=None)
+    options.update(selectors)
     return html.unescape(text).strip(), options, command
 
 

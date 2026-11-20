@@ -227,6 +227,7 @@ class Store:
 
     def update(self, status_id, **values):
         allowed = {
+            "options",
             "status_ts",
             "workspace_id",
             "session_id",
