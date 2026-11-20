@@ -36,11 +36,11 @@ def test_invalid_send_mode_fails_before_creating_state(tmp_path):
     assert not state.exists()
 
 
-def test_headless_config_without_delivery_mode_keeps_queue(tmp_path):
+def test_headless_config_defaults_to_steering(tmp_path):
     (tmp_path / "config.toml").write_text(
         f'runtime_adapter = "headless"\nstate_dir = {json.dumps(str(tmp_path / "state"))}\n'
     )
-    assert Config.load(tmp_path).send_mode == "queue"
+    assert Config.load(tmp_path).send_mode == "steer"
 
 
 @pytest.mark.parametrize("key", list(TOKENS))

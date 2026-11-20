@@ -43,7 +43,7 @@ To use two repositories side by side, run a second client with its own profile n
 |---|---|
 | Default profile for new threads | DM `default <profile>` to Flotilla. DM `profiles` to see your choices. |
 | Headless engine, model and effort defaults | Set `engine` (`claude` or `codex`), `engine_model` and `engine_effort` in the worker config. Blank model and effort use the native CLI defaults. Sign in to each engine you want to use. |
-| Headless follow-up behavior | Set `send_mode = "queue"` or `"steer"` in the worker config. You can also select a mode for one thread in Slack. |
+| Follow-up behavior | Slack follow-ups steer when the session supports it. Prefix an individual Slack message with `[queue]` to run it after the active turn. For CLI sends, set `send_mode = "steer"` or `"queue"` in the client config. |
 | Mac model and effort | Pick them when starting a Slack session. Untagged Mac sessions use the Slack server's configured model and effort. |
 | Headless tool permissions | Set `engine_permission_policy` on the worker. See the [worker permission modes](headless-worker.md#operate-sessions). |
 | Repository tools and credentials | Install and authenticate the tools on the client host. Provision any ignored files a fresh Git worktree needs. Flotilla pairs the client with Slack; it does not copy credentials between machines. |

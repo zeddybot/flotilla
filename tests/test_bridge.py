@@ -10,25 +10,25 @@ from slack_conductor.store import Store
 from tests.support import message, result, status
 
 
-def test_tokens_are_leading_case_insensitive_and_sticky():
+def test_tokens_are_leading_case_insensitive_and_keep_session_settings():
     text, options, command = parse(
         "<@B> [ASTRA][MAX][fast][queue] fix &lt;x&gt; [close]", "B", Config()
     )
     assert text == "fix <x> [close]"
     assert options["model"] == "GPT-6.2 Astra" and options["effort"] == "max" and options["fast"]
     assert command is None
-    assert parse("next", "B", Config(), options)[1] == options
+    assert parse("next", "B", Config(), options)[1] == {**options, "send_mode": None}
     assert parse("[unknown] test", "B", Config())[0] == "[unknown] test"
 
 
-def test_default_steering_and_explicit_queue_override():
-    config = Config()
+def test_slack_send_mode_depends_on_the_message():
+    config = Config(send_mode="queue")
     _, defaults, _ = parse("start", "B", config)
-    assert defaults["send_mode"] == "steer"
+    assert defaults["send_mode"] is None
     assert defaults["model"] == "Fable 5.2"
     _, queued, _ = parse("[queue] next", "B", config, defaults)
     assert queued["send_mode"] == "queue"
-    assert parse("next again", "B", config, queued)[1]["send_mode"] == "queue"
+    assert parse("next again", "B", config, queued)[1]["send_mode"] is None
     assert parse("[steer] change course", "B", config, queued)[1]["send_mode"] == "steer"
     for token, label in {
         "fable": "Fable 5.2",
@@ -113,6 +113,10 @@ def test_channel_followups_require_mention_and_reuse_mapped_session(bridge_state
     assert "not automatically the person who dispatched you" in sent[0][2]
     assert sent[0][3]["send_mode"] == "queue"
     assert store.thread("C1", "1")["session_id"] == "s"
+    next_event = event | {"ts": "3", "text": "<@B> proceed with the fix"}
+    bridge.receive({"team_id": "T1", "event": next_event})
+    bridge.process(store.next_event())
+    assert sent[-1][3]["send_mode"] == "steer"
 
 
 def test_pending_unmentioned_channel_event_is_ignored_but_dm_is_accepted(bridge_state):
