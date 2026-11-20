@@ -81,13 +81,11 @@ class Bridge:
     def check_options(self, options, session_id=None):
         if not hasattr(self.conductor, "probe"):
             if options["send_mode"] is None:
-                options["send_mode"] = "queue"
+                options["send_mode"] = "steer"
             return
         probe = self.conductor.probe()
         capabilities = probe.get("capabilities", {})
         configuration = probe.get("configuration", {})
-        if options["send_mode"] is None:
-            options["send_mode"] = configuration.get("default_send_mode", "queue")
         if probe.get("adapter") == "headless":
             if session_id:
                 description = self.conductor.rpc("runtime.describe", {"session_id": session_id})
@@ -108,6 +106,8 @@ class Bridge:
                 efforts = configuration.get("engine_efforts", {}).get(engine)
                 if efforts is not None and options["effort"] and options["effort"] not in efforts:
                     raise ValueError(f"The {engine} engine does not support this effort level.")
+        if options["send_mode"] is None:
+            options["send_mode"] = "steer" if capabilities.get("steer") else "queue"
         if not capabilities.get(options["send_mode"]):
             target = "session" if session_id and probe.get("adapter") == "headless" else "profile"
             raise ValueError(f"This {target} does not support {options['send_mode']}.")
@@ -239,8 +239,6 @@ class Bridge:
             previous = json.loads(thread["options"]) if thread else None
             contributor = self.routed and event.get("user") != self.owner_id
             baseline = parse("", self.bot_id, self.config, previous)[1]
-            if contributor:
-                baseline["send_mode"] = "queue"
             text, options, command = parse(event["text"], self.bot_id, self.config, baseline)
             if contributor and (
                 not thread
@@ -306,14 +304,16 @@ class Bridge:
                 saved = self.store.status(status_id)
                 options = json.loads(saved["options"])
                 prompt = saved["prompt"]
+                needs_default = options["send_mode"] is None
                 if self.routed:
                     session_id = saved["session_id"]
                     if not session_id and thread and command != "new":
                         session_id = thread["session_id"]
-                    needs_default = options["send_mode"] is None
                     self.check_options(options, session_id)
-                    if needs_default:
-                        self.store.update(status_id, options=json.dumps(options))
+                elif needs_default:
+                    options["send_mode"] = "steer"
+                if needs_default:
+                    self.store.update(status_id, options=json.dumps(options))
                 if saved["workspace_id"]:
                     workspace = self.conductor.validate(saved["workspace_id"], saved["session_id"])
                 elif not thread or command == "new":
@@ -327,7 +327,13 @@ class Bridge:
                         thread["workspace_id"], thread["session_id"]
                     )
                 sid = workspace["active_session_id"]
-                self.store.bind(channel, thread_ts, workspace, previous if contributor else options)
+                session_options = previous if contributor else options
+                self.store.bind(
+                    channel,
+                    thread_ts,
+                    workspace,
+                    {name: value for name, value in session_options.items() if name != "send_mode"},
+                )
                 self.store.update(
                     status_id,
                     workspace_id=workspace["id"],

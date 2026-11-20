@@ -14,4 +14,4 @@ engine_model = ""
 engine_effort = ""
 # Daytona is the execution boundary; Codex runs without an inner sandbox.
 engine_permission_policy = "external-sandbox"
-send_mode = "queue"
+send_mode = "steer"

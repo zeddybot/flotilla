@@ -204,18 +204,20 @@ def test_atomic_first_summoner_routes_to_one_client_and_survives_restart(tmp_pat
     assert reboot.to_bridge(loser).store.next_event() is None
     target.process(target.store.next_event())
     guest = "U2" if route["owner_id"] == "U1" else "U1"
-    assert reboot.receive(event(guest, "4", "<@B> follow up", thread="1"))
+    assert reboot.receive(event(guest, "4", "<@B> [queue] follow up later", thread="1"))
     target.process(target.store.next_event())
     assert len(endpoints[winner].sent) == 2
     assert f"sender=<@{guest}>" in endpoints[winner].sent[-1][2]
     assert endpoints[winner].sent[-1][3]["send_mode"] == "queue"
-    assert parse("", "B", bridge.config)[1]["send_mode"] == "steer"
+    assert reboot.receive(event(guest, "5", "<@B> change course now", thread="1"))
+    target.process(target.store.next_event())
+    assert endpoints[winner].sent[-1][3]["send_mode"] == "steer"
 
-    for ts, control in enumerate(["stop", "close", "questions", "deny:id", "new", "verbose"], 5):
+    for ts, control in enumerate(["stop", "close", "questions", "deny:id", "new", "verbose"], 6):
         assert reboot.receive(event(guest, str(ts), f"<@B> [{control}] text", thread="1"))
         target.process(target.store.next_event())
     assert not endpoints[winner].mutations
-    assert len(endpoints[winner].sent) == 2
+    assert len(endpoints[winner].sent) == 3
     assert not endpoints[loser].sent
     assert all(row[0] == guest for row in bridge.slack.posts[-6:])
 
@@ -259,7 +261,7 @@ def test_unregistered_user_gets_private_guide_without_thread_claim(tmp_path):
 
 @pytest.mark.parametrize(
     ("default_mode", "selector", "expected_mode"),
-    [("queue", "", "queue"), ("steer", "", "steer"), ("steer", "[queue]", "queue")],
+    [("queue", "", "steer"), ("steer", "", "steer"), ("steer", "[queue]", "queue")],
 )
 def test_first_headless_prompt_uses_client_settings(
     tmp_path, monkeypatch, default_mode, selector, expected_mode
@@ -299,7 +301,7 @@ def test_first_headless_prompt_uses_client_settings(
     target.process(target.store.next_event())
     assert runtime.sessions()[0]["configuration"]["requested"]["model"] == "sonnet"
     assert peer.sent == [{"send_mode": expected_mode, "verbose": False}]
-    assert json.loads(target.store.thread("C1", "1")["options"])["send_mode"] == expected_mode
+    assert "send_mode" not in json.loads(target.store.thread("C1", "1")["options"])
 
 
 @pytest.mark.parametrize(
@@ -369,8 +371,8 @@ def test_headless_steering_uses_the_bound_sessions_capabilities(tmp_path):
     process("3", "[sol] use a different model without [new]")
     assert len(created) == len(peer.sent) == 1
 
-    process("4", "[new][sol][xhigh] start a Codex session")
-    process("5", "[steer] follow up")
+    process("4", "[new][sol][xhigh][queue] start a Codex session")
+    process("5", "steer by default in the new session")
     assert [item["engine"] for item in created] == ["", "codex"]
     assert created[1]["model"] == "gpt-6.2-sol"
     assert created[1]["effort"] == "xhigh"

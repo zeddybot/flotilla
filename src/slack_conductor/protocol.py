@@ -43,13 +43,15 @@ def parse(text, bot_id, config, previous=None):
         "model": "" if headless else config.model,
         "effort": "" if headless else config.effort,
         "fast": False,
-        "send_mode": None if headless else config.send_mode,
+        "send_mode": None,
         "verbose": False,
     }
     if headless:
         options["engine"] = ""
     if previous:
-        options.update({key: previous[key] for key in options if key in previous})
+        options.update(
+            {key: previous[key] for key in options if key in previous and key != "send_mode"}
+        )
     command = None
     selectors = {}
     while match := re.match(r"^\s*\[([^\]]+)\]\s*", text):
@@ -90,7 +92,7 @@ def parse(text, bot_id, config, previous=None):
             break  # Unknown bracket text belongs to the prompt.
         text = text[match.end() :]
     if headless and "engine" in selectors and options["engine"] != selectors["engine"]:
-        options.update(model="", effort="", send_mode=None)
+        options.update(model="", effort="")
     options.update(selectors)
     return html.unescape(text).strip(), options, command
 
