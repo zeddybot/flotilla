@@ -2,7 +2,6 @@
 
 import re
 import threading
-from dataclasses import replace
 
 from .intake import audit
 from .pairing import PAIR_CODE, PROFILE_NAME
@@ -93,8 +92,6 @@ class Routing:
                     raise ValueError("The client linked to this thread is unavailable.")
                 endpoint = self.conductor.for_client(client_id)
                 config = endpoint.config
-                if profile.backend == "headless":
-                    config = replace(config, model="", effort="", send_mode="queue")
                 bridge = Bridge(
                     config,
                     Store(config.state_dir / "bridge.sqlite"),

@@ -1,4 +1,5 @@
 import hashlib
+import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from threading import Barrier
@@ -256,12 +257,24 @@ def test_unregistered_user_gets_private_guide_without_thread_claim(tmp_path):
     assert "private work" not in text
 
 
-def test_first_headless_prompt_uses_client_model_settings(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("default_mode", "selector", "expected_mode"),
+    [("queue", "", "queue"), ("steer", "", "steer"), ("steer", "[queue]", "queue")],
+)
+def test_first_headless_prompt_uses_client_settings(
+    tmp_path, monkeypatch, default_mode, selector, expected_mode
+):
     bridge, endpoints = setup(tmp_path)
     client_id = register(bridge, endpoints, "U2", "1" * 32, backend="headless")
     peer = endpoints[client_id]
     runtime = HeadlessRuntime(
-        replace(peer.config, workspace_root=tmp_path, claude_binary="true", engine_model="sonnet")
+        replace(
+            peer.config,
+            workspace_root=tmp_path,
+            claude_binary="true",
+            engine_model="sonnet",
+            send_mode=default_mode,
+        )
     )
     monkeypatch.setattr(
         "slack_conductor.headless.runtime.subprocess.run",
@@ -281,11 +294,121 @@ def test_first_headless_prompt_uses_client_model_settings(tmp_path, monkeypatch)
     peer.create_session = create
     peer.send = send
     router = Routing(bridge)
-    assert router.receive(event("U2", "1", "<@B> [profile:daytona] first headless prompt"))
+    assert router.receive(event("U2", "1", f"<@B> [profile:daytona] {selector} first prompt"))
     target = router.to_bridge(client_id)
     target.process(target.store.next_event())
     assert runtime.sessions()[0]["configuration"]["requested"]["model"] == "sonnet"
-    assert peer.sent == [{"send_mode": "queue", "verbose": False}]
+    assert peer.sent == [{"send_mode": expected_mode, "verbose": False}]
+    assert json.loads(target.store.thread("C1", "1")["options"])["send_mode"] == expected_mode
+
+
+@pytest.mark.parametrize(
+    ("selectors", "engine", "model"),
+    [
+        ("[sol][codex]", "codex", "gpt-6.2-sol"),
+        ("[astra]", "codex", "gpt-6.2-astra"),
+        ("[claude][opus]", "claude", "opus"),
+        ("[model:claude-sonnet-4-6]", "claude", "claude-sonnet-4-6"),
+    ],
+)
+def test_headless_model_prefixes_use_native_values(selectors, engine, model):
+    text, options, command = parse(
+        f"[new]{selectors}[high] investigate", "B", Config(runtime_adapter="headless")
+    )
+    assert (text, command) == ("investigate", "new")
+    assert (options["engine"], options["model"], options["effort"]) == (engine, model, "high")
+
+
+def test_headless_conflicting_prefixes_are_rejected():
+    config = Config(runtime_adapter="headless")
+    with pytest.raises(ValueError, match="one engine"):
+        parse("[codex][opus] investigate", "B", config)
+    with pytest.raises(ValueError, match="one model"):
+        parse("[sol][astra] investigate", "B", config)
+
+
+def test_headless_steering_uses_the_bound_sessions_capabilities(tmp_path):
+    bridge, endpoints = setup(tmp_path)
+    client_id = register(bridge, endpoints, "U2", "1" * 32, backend="headless")
+    peer = endpoints[client_id]
+    probe = peer.probe()
+    peer.probe = lambda: {
+        **probe,
+        "adapter": "headless",
+        "configuration": {
+            "engines": ["claude", "codex"],
+            "default_engine": "claude",
+            "engine_capabilities": {
+                "claude": {"queue": True, "steer": False},
+                "codex": {"queue": True, "steer": True},
+            },
+        },
+    }
+    created = []
+    descriptions = {
+        "claude": {"capabilities": {"queue": True, "steer": False}},
+        "codex": {"capabilities": {"queue": True, "steer": True}},
+    }
+
+    def create(key, options):
+        created.append(options)
+        engine = options["engine"] or "claude"
+        return {"id": engine, "active_session_id": engine}
+
+    peer.create_session = create
+    peer.rpc = lambda method, args: descriptions[args["session_id"]]
+    router = Routing(bridge)
+    target = router.to_bridge(client_id)
+
+    def process(ts, prompt):
+        assert router.receive(event("U2", ts, f"<@B> {prompt}", thread="1" if ts != "1" else None))
+        target.process(target.store.next_event())
+
+    process("1", "initial prompt")
+    process("2", "[steer] unsupported for this session")
+    process("3", "[sol] use a different model without [new]")
+    assert len(created) == len(peer.sent) == 1
+
+    process("4", "[new][sol][xhigh] start a Codex session")
+    process("5", "[steer] follow up")
+    assert [item["engine"] for item in created] == ["", "codex"]
+    assert created[1]["model"] == "gpt-6.2-sol"
+    assert created[1]["effort"] == "xhigh"
+    assert [send[-1]["send_mode"] for send in peer.sent] == ["queue", "queue", "steer"]
+    assert peer.sent[-1][1] == "codex"
+
+
+def test_old_headless_worker_accepts_queue_and_rejects_new_session_controls(tmp_path):
+    bridge, endpoints = setup(tmp_path)
+    client_id = register(bridge, endpoints, "U2", "1" * 32, backend="headless")
+    peer = endpoints[client_id]
+    peer.probe = lambda: {
+        "adapter": "headless",
+        "capabilities": {"create": True, "queue": True, "steer": False},
+        "configuration": {"engines": ["claude", "codex"]},
+    }
+    peer.rpc = lambda method, args: {"engine": "claude"}
+    created = []
+    peer.create_session = lambda key, options: (
+        created.append(options)
+        or {
+            "id": "w",
+            "active_session_id": "s",
+        }
+    )
+    router = Routing(bridge)
+    target = router.to_bridge(client_id)
+
+    def process(ts, prompt, thread=None):
+        assert router.receive(event("U2", ts, f"<@B> {prompt}", thread=thread))
+        target.process(target.store.next_event())
+
+    process("1", "use the worker defaults")
+    process("2", "ordinary follow-up", thread="1")
+    process("3", "[steer] redirect", thread="1")
+    process("4", "[new][codex][high] choose a new engine", thread="1")
+    assert len(created) == 1
+    assert [send[-1]["send_mode"] for send in peer.sent] == ["queue", "queue"]
 
 
 def test_owner_approval_reuses_validated_response_after_unconfirmed_send(tmp_path):
