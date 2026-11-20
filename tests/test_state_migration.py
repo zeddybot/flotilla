@@ -123,3 +123,79 @@ def test_import_rejects_path_traversal_before_writing_state(tmp_path):
     with pytest.raises(ValueError, match="unsafe archive member"):
         import_state(archive, target)
     assert not (tmp_path / "escape").exists()
+
+
+def test_version_one_archive_remains_importable(tmp_path):
+    source = tmp_path / "source"
+    populated_state(source)
+    current = export_state(source, tmp_path / "current.tar.gz")
+    old = tmp_path / "legacy.tar.gz"
+    with tarfile.open(current, "r:gz") as original, tarfile.open(old, "w:gz") as legacy:
+        for member in original:
+            with original.extractfile(member) as stream:
+                if member.name == "manifest.json":
+                    manifest = json.load(stream)
+                    manifest.pop("checkpoints")
+                    manifest["version"] = 1
+                    data = json.dumps(manifest).encode()
+                    member.size = len(data)
+                    legacy.addfile(member, io.BytesIO(data))
+                else:
+                    legacy.addfile(member, stream)
+    target = tmp_path / "target"
+    import_state(old, target)
+    assert (target / "uploads" / "1" / "0").read_bytes() == b"half-uploaded image"
+
+
+def test_shared_server_archive_restores_profiles_routes_and_client_state(tmp_path):
+    from hashlib import sha256
+
+    from slack_conductor.pairing import PairingStore
+    from slack_conductor.remote_journal import Receipts
+
+    source, target = tmp_path / "source", tmp_path / "destination"
+    populated_state(source)
+    registry = PairingStore(source / "pairing.sqlite")
+    token = "paired-bearer-for-a-client-" + "x" * 32
+    code = "a" * 32
+    registry.register(code, sha256(token.encode()).hexdigest(), "desktop", "conductor")
+    profile = registry.claim(code, "T1", "U1")
+    registry.set_default("T1", "U1", "desktop")
+
+    global_store = Store(source / "bridge.sqlite")
+    global_store.execute(
+        "INSERT INTO slack_routes VALUES (?,?,?,?,?)", ("T1", "C1", "1.00", "U1", profile.id)
+    )
+    client_scope = Path("clients") / profile.id
+    (source / "clients").mkdir()
+    status_id = populated_state(source / client_scope)
+    checkpoint = '{"1.00": 42.0}'
+    (source / client_scope / "intake-threads.json").write_text(checkpoint)
+    (source / client_scope / "intake-status.json").write_text('{"ready":true}')
+    receipt_dir = source / client_scope / "remote.sqlite"
+    receipts = Receipts(receipt_dir)
+    receipts.begin("action", "runtime.create", {})
+    receipts.finish("action", {"value": "confirmed"})
+
+    archive = export_state(source, tmp_path / "shared.tar.gz")
+    import_state(archive, target)
+
+    restored_registry = PairingStore(target / "pairing.sqlite")
+    assert restored_registry.authenticate(token) == profile
+    assert restored_registry.get_default("T1", "U1") == profile
+    assert Store(target / "bridge.sqlite").route("T1", "C1", "1.00")["client_id"] == profile.id
+    restored_scope = target / client_scope
+    restored_receipts = Receipts(restored_scope / "remote.sqlite")
+    assert restored_receipts.begin("action", "runtime.create", {}) == {"value": "confirmed"}
+    restored_store = Store(restored_scope / "bridge.sqlite")
+    plan = json.loads(restored_store.status(status_id)["attachments"])
+    snapshot = restored_scope / "uploads" / str(status_id) / "0"
+    assert plan["files"][0]["snapshot"] == str(snapshot)
+    assert snapshot.read_bytes() == b"half-uploaded image"
+    assert (restored_scope / "intake-threads.json").read_text() == checkpoint
+    assert not (restored_scope / "intake-status.json").exists()
+
+    rollback = export_state(target, tmp_path / "rollback.tar.gz")
+    import_state(rollback, source, replace=True)
+    assert (source / "migration-previous" / client_scope / "bridge.sqlite").is_file()
+    assert (source / client_scope / "intake-threads.json").read_text() == checkpoint

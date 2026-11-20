@@ -11,6 +11,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import sqlite3
 import tarfile
@@ -19,6 +20,16 @@ from contextlib import closing, contextmanager
 from pathlib import Path, PurePosixPath
 
 DATABASES = ("bridge.sqlite", "remote.sqlite")
+GLOBAL_DATABASES = (*DATABASES, "pairing.sqlite")
+CHECKPOINTS = "intake-threads.json"
+CLIENT_ID = re.compile(r"[0-9a-f]{32}")
+INSTALL_PATHS = (
+    *GLOBAL_DATABASES,
+    "uploads",
+    "clients",
+    CHECKPOINTS,
+    *(f"{db}-{suffix}" for db in GLOBAL_DATABASES for suffix in ("wal", "shm", "journal")),
+)
 MAX_ARCHIVE_FILE = 512 * 1024 * 1024
 
 
@@ -35,7 +46,7 @@ def inactive(state_dir):
 
 def backup(source, destination):
     with (
-        closing(sqlite3.connect(f"file:{source}?mode=ro", uri=True)) as original,
+        closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as original,
         closing(sqlite3.connect(destination)) as copy,
     ):
         original.backup(copy)
@@ -49,9 +60,9 @@ def file_digest(path):
     return digest.hexdigest()
 
 
-def snapshot_members(database, state_dir):
+def snapshot_members(database, state_dir, scope):
     """Locate only snapshots still referenced by durable upload plans."""
-    uploads = (state_dir / "uploads").resolve()
+    uploads = state_dir / scope / "uploads"
     records = []
     with closing(sqlite3.connect(database)) as conn:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(statuses)")}
@@ -67,11 +78,11 @@ def snapshot_members(database, state_dir):
                     continue
                 source = Path(item["snapshot"])
                 expected = uploads / str(status_id) / str(index)
-                if source.resolve() != expected or not source.is_file() or source.is_symlink():
+                if source != expected or source.resolve() != expected or not source.is_file():
                     raise ValueError(
                         f"unsafe or missing snapshot for status {status_id}, file {index}"
                     )
-                member = f"uploads/{status_id}/{index}"
+                member = (scope / "uploads" / str(status_id) / str(index)).as_posix()
                 records.append(
                     {
                         "status_id": status_id,
@@ -86,9 +97,26 @@ def snapshot_members(database, state_dir):
 
 def add_file(archive, source, name):
     info = archive.gettarinfo(str(source), arcname=name)
+    validate_member(info)
     info.mode = 0o600
     with source.open("rb") as data:
         archive.addfile(info, data)
+
+
+def state_databases(state_dir):
+    for name in GLOBAL_DATABASES:
+        if (state_dir / name).is_file():
+            yield name
+    clients = state_dir / "clients"
+    if clients.is_symlink():
+        raise ValueError("unsafe client state path")
+    if clients.is_dir():
+        for client in sorted(clients.iterdir()):
+            if CLIENT_ID.fullmatch(client.name) and client.is_dir():
+                for name in DATABASES:
+                    path = client / name
+                    if path.is_file():
+                        yield path.relative_to(state_dir).as_posix()
 
 
 def export_state(state_dir, output):
@@ -99,26 +127,46 @@ def export_state(state_dir, output):
         output.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="state-export-") as work:
             work = Path(work)
-            files = {}
-            for name in DATABASES:
-                if (state_dir / name).is_file():
-                    backup(state_dir / name, work / name)
-                    files[name] = {
-                        "size": (work / name).stat().st_size,
-                        "sha256": file_digest(work / name),
-                    }
-            snapshots = snapshot_members(work / "bridge.sqlite", state_dir)
-            manifest = {"version": 1, "databases": files, "snapshots": snapshots}
+            files, checkpoints, snapshots = {}, {}, []
+            for name in state_databases(state_dir):
+                source, destination = state_dir / name, work / name
+                if source.resolve() != source:
+                    raise ValueError("unsafe database path")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                backup(source, destination)
+                files[name] = {
+                    "size": destination.stat().st_size,
+                    "sha256": file_digest(destination),
+                }
+                if destination.name == "bridge.sqlite":
+                    scope = Path(name).parent
+                    snapshots.extend(snapshot_members(destination, state_dir, scope))
+                    checkpoint = state_dir / scope / CHECKPOINTS
+                    if checkpoint.is_file():
+                        if checkpoint.resolve() != checkpoint:
+                            raise ValueError("unsafe recovery checkpoint path")
+                        checkpoints[(scope / CHECKPOINTS).as_posix()] = {
+                            "size": checkpoint.stat().st_size,
+                            "sha256": file_digest(checkpoint),
+                        }
+            manifest = {
+                "version": 2,
+                "databases": files,
+                "checkpoints": checkpoints,
+                "snapshots": snapshots,
+            }
             fd, temporary = tempfile.mkstemp(prefix=".state-", suffix=".tar.gz", dir=output.parent)
             os.close(fd)
             try:
-                with tarfile.open(temporary, "w:gz") as archive:
+                with tarfile.open(temporary, "w:gz", dereference=True) as archive:
                     body = json.dumps(manifest, sort_keys=True).encode()
                     info = tarfile.TarInfo("manifest.json")
                     info.size, info.mode = len(body), 0o600
                     archive.addfile(info, io.BytesIO(body))
                     for name in files:
                         add_file(archive, work / name, name)
+                    for name in checkpoints:
+                        add_file(archive, state_dir / name, name)
                     for snapshot in snapshots:
                         add_file(archive, state_dir / snapshot["member"], snapshot["member"])
                 os.chmod(temporary, 0o600)
@@ -140,6 +188,158 @@ def validate_member(member):
         raise ValueError("unsafe archive member")
 
 
+def validate_database_name(name, version):
+    if name in DATABASES or version == 2 and name in GLOBAL_DATABASES:
+        return
+    parts = PurePosixPath(name).parts
+    if (
+        version != 2
+        or len(parts) != 3
+        or parts[0] != "clients"
+        or not CLIENT_ID.fullmatch(parts[1])
+        or parts[2] not in DATABASES
+    ):
+        raise ValueError("invalid database manifest")
+
+
+def stage_file(archive, work, name, metadata):
+    destination = work / name
+    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with archive.extractfile(name) as source, destination.open("wb") as target:
+        shutil.copyfileobj(source, target)
+    if destination.stat().st_size != metadata["size"] or (
+        file_digest(destination) != metadata["sha256"]
+    ):
+        raise ValueError(f"archive checksum mismatch for {name}")
+    destination.chmod(0o600)
+    return destination
+
+
+def stage_archive(archive_path, work):
+    with tarfile.open(archive_path, "r:gz") as archive:
+        members = archive.getmembers()
+        names = [member.name for member in members]
+        for member in members:
+            validate_member(member)
+        if len(names) != len(set(names)) or "manifest.json" not in names:
+            raise ValueError("duplicate or missing archive member")
+        with archive.extractfile("manifest.json") as body:
+            manifest = json.load(body)
+        version = manifest.get("version")
+        if type(version) is not int or version not in (1, 2):
+            raise ValueError("unsupported archive version")
+        databases = manifest.get("databases", {})
+        checkpoints = manifest.get("checkpoints", {})
+        snapshots = manifest.get("snapshots", [])
+        if "bridge.sqlite" not in databases or (version == 1 and checkpoints):
+            raise ValueError("invalid database manifest")
+        expected = {
+            "manifest.json",
+            *databases,
+            *checkpoints,
+            *(item["member"] for item in snapshots),
+        }
+        if set(names) != expected:
+            raise ValueError("unexpected archive member")
+        for name, metadata in databases.items():
+            validate_database_name(name, version)
+            destination = stage_file(archive, work, name, metadata)
+            try:
+                with closing(sqlite3.connect(destination.as_uri() + "?mode=ro", uri=True)) as conn:
+                    valid = conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            except sqlite3.DatabaseError as exc:
+                raise ValueError("database integrity check failed") from exc
+            if not valid:
+                raise ValueError("database integrity check failed")
+        for name, metadata in checkpoints.items():
+            path = PurePosixPath(name)
+            if (
+                path.name != CHECKPOINTS
+                or (path.parent / "bridge.sqlite").as_posix() not in databases
+            ):
+                raise ValueError("invalid checkpoint manifest")
+            destination = stage_file(archive, work, name, metadata)
+            with destination.open() as data:
+                if not isinstance(json.load(data), dict):
+                    raise TypeError("invalid recovery checkpoint")
+        snapshot_names = set()
+        for item in snapshots:
+            name = item["member"]
+            path = PurePosixPath(name)
+            status_id, index = item["status_id"], item["index"]
+            bridge = (path.parent.parent.parent / "bridge.sqlite").as_posix()
+            if (
+                bridge not in databases
+                or type(status_id) is not int
+                or type(index) is not int
+                or index < 0
+                or path.parts[-3:] != ("uploads", str(status_id), str(index))
+                or name in snapshot_names
+            ):
+                raise ValueError("invalid snapshot manifest")
+            stage_file(archive, work, name, item)
+            snapshot_names.add(name)
+    return databases, snapshot_names
+
+
+def rewrite_snapshots(database, scope, state_dir, remaining):
+    with closing(sqlite3.connect(database)) as conn, conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(statuses)")}
+        if "attachments" not in columns:
+            return
+        for status_id, state, raw in conn.execute("SELECT id,state,attachments FROM statuses"):
+            plan = json.loads(raw or "{}")
+            changed = False
+            for index, item in enumerate(plan.get("files", [])):
+                if not item.get("snapshot"):
+                    continue
+                if state != "delivering":
+                    item.pop("snapshot")
+                else:
+                    member = scope / "uploads" / str(status_id) / str(index)
+                    if member.as_posix() not in remaining:
+                        raise ValueError("missing referenced snapshot")
+                    remaining.remove(member.as_posix())
+                    item["snapshot"] = str(state_dir / member)
+                changed = True
+            if changed:
+                conn.execute(
+                    "UPDATE statuses SET attachments=? WHERE id=?", (json.dumps(plan), status_id)
+                )
+
+
+def install_state(work, state_dir, *, replace):
+    incoming = [name for name in INSTALL_PATHS if (work / name).exists()]
+    existing = [
+        name
+        for name in INSTALL_PATHS
+        if (state_dir / name).exists() or (state_dir / name).is_symlink()
+    ]
+    if existing and not replace:
+        target = state_dir / existing[0]
+        raise FileExistsError(f"{target} exists; pass --replace after stopping daemon")
+    previous = state_dir / "migration-previous"
+    if replace:
+        # Keep a stopped copy for manual rollback, including any journal sidecars.
+        previous.mkdir(mode=0o700)
+    saved, installed = [], []
+    try:
+        for name in existing:
+            os.replace(state_dir / name, previous / name)
+            saved.append(name)
+        for name in incoming:
+            os.replace(work / name, state_dir / name)
+            installed.append(name)
+    except OSError:
+        for name in reversed(installed):
+            os.replace(state_dir / name, work / name)
+        for name in reversed(saved):
+            os.replace(previous / name, state_dir / name)
+        if replace:
+            previous.rmdir()
+        raise
+
+
 def import_state(archive_path, state_dir, *, replace=False):
     state_dir = Path(state_dir).resolve()
     with (
@@ -147,99 +347,14 @@ def import_state(archive_path, state_dir, *, replace=False):
         tempfile.TemporaryDirectory(prefix="state-import-", dir=state_dir) as temporary,
     ):
         work = Path(temporary)
-        with tarfile.open(archive_path, "r:gz") as archive:
-            members = archive.getmembers()
-            names = [member.name for member in members]
-            for member in members:
-                validate_member(member)
-            if len(names) != len(set(names)) or "manifest.json" not in names:
-                raise ValueError("duplicate or missing archive member")
-            manifest_member = archive.extractfile("manifest.json")
-            manifest = json.load(manifest_member)
-            if manifest.get("version") != 1:
-                raise ValueError("unsupported archive version")
-            databases = manifest.get("databases", {})
-            snapshots = manifest.get("snapshots", [])
-            if "bridge.sqlite" not in databases or set(databases) - set(DATABASES):
-                raise ValueError("invalid database manifest")
-            expected = {"manifest.json", *databases, *(item["member"] for item in snapshots)}
-            if set(names) != expected:
-                raise ValueError("unexpected archive member")
-            for name in databases:
-                destination = work / name
-                with archive.extractfile(name) as source, destination.open("wb") as target:
-                    shutil.copyfileobj(source, target)
-                if destination.stat().st_size != databases[name]["size"] or (
-                    file_digest(destination) != databases[name]["sha256"]
-                ):
-                    raise ValueError("database checksum mismatch")
-                try:
-                    with closing(sqlite3.connect(f"file:{destination}?mode=ro", uri=True)) as conn:
-                        valid = conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-                except sqlite3.DatabaseError as exc:
-                    raise ValueError("database integrity check failed") from exc
-                if not valid:
-                    raise ValueError("database integrity check failed")
-            mapping = {}
-            for item in snapshots:
-                name = item["member"]
-                expected_name = f"uploads/{item['status_id']}/{item['index']}"
-                if name != expected_name or name in mapping:
-                    raise ValueError("invalid snapshot manifest")
-                destination = work / name
-                destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-                with archive.extractfile(name) as source, destination.open("wb") as target:
-                    shutil.copyfileobj(source, target)
-                if destination.stat().st_size != item["size"] or (
-                    file_digest(destination) != item["sha256"]
-                ):
-                    raise ValueError("snapshot checksum mismatch")
-                mapping[name] = destination
-        with closing(sqlite3.connect(work / "bridge.sqlite")) as conn, conn:
-            for status_id, state, raw in conn.execute("SELECT id,state,attachments FROM statuses"):
-                plan = json.loads(raw or "{}")
-                changed = False
-                for index, item in enumerate(plan.get("files", [])):
-                    if item.get("snapshot"):
-                        if state != "delivering":
-                            item.pop("snapshot")
-                            changed = True
-                            continue
-                        member = f"uploads/{status_id}/{index}"
-                        if member not in mapping:
-                            raise ValueError("missing referenced snapshot")
-                        item["snapshot"] = str(state_dir / member)
-                        changed = True
-                if changed:
-                    conn.execute(
-                        "UPDATE statuses SET attachments=? WHERE id=?",
-                        (json.dumps(plan), status_id),
-                    )
+        databases, remaining = stage_archive(archive_path, work)
         for name in databases:
-            target = state_dir / name
-            if target.exists() and not replace:
-                raise FileExistsError(f"{target} exists; pass --replace after stopping daemon")
-            if (state_dir / "uploads").exists() and not replace:
-                raise FileExistsError("uploads exists; pass --replace after stopping daemon")
-        # Preserve previous state for an immediate manual rollback. Native state is untouched.
-        previous = state_dir / "migration-previous"
-        if replace and previous.exists():
-            raise FileExistsError("migration-previous exists; move it before another replace")
-        if replace:
-            previous.mkdir(mode=0o700)
-            for name in (
-                *DATABASES,
-                "uploads",
-                *(f"{db}-{suffix}" for db in DATABASES for suffix in ("wal", "shm")),
-            ):
-                old = state_dir / name
-                if old.exists():
-                    os.replace(old, previous / name)
-        for name in databases:
-            os.chmod(work / name, 0o600)
-            os.replace(work / name, state_dir / name)
-        if mapping:
-            os.replace(work / "uploads", state_dir / "uploads")
+            relative = Path(name)
+            if relative.name == "bridge.sqlite":
+                rewrite_snapshots(work / name, relative.parent, state_dir, remaining)
+        if remaining:
+            raise ValueError("unreferenced snapshot in archive")
+        install_state(work, state_dir, replace=replace)
 
 
 def main():
