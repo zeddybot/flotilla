@@ -15,7 +15,7 @@ def runtime_for_cli(config):
         return RuntimeProxy(config.state_dir)
     from .runtime_adapter import local_runtime
 
-    return local_runtime(config)
+    return local_runtime(config, daemon=False)
 
 
 def _client(config):

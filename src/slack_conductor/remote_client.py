@@ -77,7 +77,7 @@ def run_client(config, token, stop, *, conductor=None, runtime=None):
     if conductor is None and runtime is None:
         from .runtime_adapter import local_runtime
 
-        runtime = local_runtime(config)
+        runtime = local_runtime(config, daemon=True)
     dispatcher = Dispatcher(config, conductor, runtime)
     runtime = dispatcher.runtime
     runtime.start(dispatcher.receipts.bindings())
