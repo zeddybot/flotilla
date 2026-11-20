@@ -28,7 +28,7 @@ Invite **Flotilla** to the channel and mention it in a message.
 @flotilla [new] start a fresh workspace for the next task
 ```
 
-On a fresh Conductor server the defaults are Fable 5.2, high effort, and steering. A follow-up while the agent is working goes into its running turn; `[queue]` waits and starts a separate turn afterward. An idle agent starts either kind immediately. Model tokens include `[fable]` → Fable 5.2, `[haiku]` → Haiku 5.5 (1M), `[opus]` → Opus 5.5, `[astra]` → GPT-6.2 Astra, `[sol]` → GPT-6.2 Sol, `[terra]` → GPT-6.1 Terra, `[luna]` → GPT-6 Luna, `[sonnet]` → Sonnet 5.5, and `[alpha]` → OpenCode Zen's Union Alpha Free. Fable 5.2 supports `[fast]` and effort through `[ultracode]`; Haiku 5.5 supports effort through `[max]` and standard speed. Alpha uses Conductor's OpenCode integration through ACP, independent of picker favorites; effort uses the provider default and fast mode is unavailable. Existing installations with a `[models]` table in `config.toml` must update their aliases there; the table overrides these defaults. Model selection applies when a session starts; use `[new][fable]` or `[new][haiku]` to select the new models from an existing thread. Explicit Fable 5.1 and Haiku 4.5 labels remain supported for existing sessions and custom aliases.
+For new Mac sessions, the built-in model and effort defaults are Fable 5.2 and high. A follow-up while the agent is working goes into its running turn; `[queue]` waits and starts a separate turn afterward. An idle agent starts either kind immediately. Model tokens include `[fable]` → Fable 5.2, `[haiku]` → Haiku 5.5 (1M), `[opus]` → Opus 5.5, `[astra]` → GPT-6.2 Astra, `[sol]` → GPT-6.2 Sol, `[terra]` → GPT-6.1 Terra, `[luna]` → GPT-6 Luna, `[sonnet]` → Sonnet 5.5, and `[alpha]` → OpenCode Zen's Union Alpha Free. Fable 5.2 supports `[fast]` and effort through `[ultracode]`; Haiku 5.5 supports effort through `[max]` and standard speed. Alpha uses Conductor's OpenCode integration through ACP, independent of picker favorites; effort uses the provider default and fast mode is unavailable. A `[models]` table in the server’s `config.toml` overrides the built-in Mac aliases. Model selection applies when a session starts; use `[new][fable]` or `[new][haiku]` to select the new models from an existing thread. Explicit Fable 5.1 and Haiku 4.5 labels remain supported for existing sessions and custom aliases.
 
 The same model tokens work on headless profiles, except for `[alpha]`, which requires Conductor. Start a GPT-6.2 Sol session with `[profile:daytona][sol]` or an Opus 5.5 session with `[profile:daytona][opus]`. Choose the default repo and model in the [client configuration](docs/connect-client.md#configure-a-client). Older queue-only workers automatically queue untagged Slack messages.
 
@@ -36,7 +36,7 @@ The prompt encourages agents to @mention people they address directly or need ac
 
 The tokens must lead the prompt, after an optional bot mention. Model, effort, and fast mode are configured when a session starts; use `[new]` to change them. Verbose stays enabled in the Slack thread. `[queue]` applies to the message it prefixes. The next untagged message steers if the session supports steering. Model/effort/fast selection is best effort; mismatches appear in the status. Unknown bracket tokens remain prompt text. `[close]` archives the mapped workspace and may stop its running agent. `[new]` maps the thread to a new workspace; any older active turn still delivers its own result.
 
-The bridge calls Conductor’s native services for creation, configuration, sending, queueing, steering, and archiving. This is the only control path. It binds each Slack thread to a workspace and session independently of the selected chat, so you can continue typing and navigating in Conductor. Inspector opens briefly during startup/reconnection to attach the native dispatcher, then closes. Accessibility permission is needed only for that bootstrap; agent prompts never pass through the UI composer.
+On a Mac, Flotilla calls Conductor’s native services for session operations. The Slack thread stays bound to its session while you navigate in Conductor. Inspector opens briefly during startup or reconnection to attach the native dispatcher. Accessibility permission is needed for that bootstrap. Prompts go through the dispatcher. Headless workers use the Claude and Codex CLIs directly.
 
 ## Recovery and diagnostics
 
@@ -78,7 +78,7 @@ Fixed the dashboard:
 Download the [results](.context/results.csv).
 ~~~
 
-Relative paths resolve against the mapped Conductor workspace; absolute paths and local
+Relative paths resolve against the session’s workspace; absolute paths and local
 file URLs also work. Images using PNG, JPEG, or GIF render inline, and other files get
 downloadable Slack links and attachments on the same reply. Web links, source locations
 such as app.py:42 or app.py#L42, and examples inside code blocks stay unchanged.
@@ -96,37 +96,27 @@ Slack app after adding these scopes to an existing installation.
 
 ## CLI
 
-```text
-sc [--root CONFIG_DIRECTORY] doctor
-sc [--root CONFIG_DIRECTORY] server
-sc [--root CONFIG_DIRECTORY] client
-sc [--root CONFIG_DIRECTORY] new REPO PROMPT
-sc [--root CONFIG_DIRECTORY] send WORKSPACE PROMPT [--queue | --steer]
-sc [--root CONFIG_DIRECTORY] archive WORKSPACE
-sc [--root CONFIG_DIRECTORY] tail SESSION
-```
-
-`--root` precedes the command and defaults to the current directory. `doctor`
-uses that directory's configured role: server health or Mac attachment/link
-health. `server` and `client` start foreground services; launchd already runs
-the installed Mac client. There is no `daemon` command or `mode = "local"`.
-
-`new`, `send`, `archive`, and `tail` require a Mac client configuration. Actions
-use the running native journal; they do not create Slack threads. `new` requires
-the configured repository and prints workspace/session IDs. `send` defaults to
-the configured send mode; model/effort defaults come from configuration. `tail`
-reads the native transcript until interrupted. There are no nested management
-subcommands or model-selection CLI flags yet.
-
-To use the installed runtime from any directory, add this function to your
-zsh/bash startup file:
-
 ```sh
-sc() {
-  local runtime="$HOME/Library/Application Support/slack-conductor/runtime"
-  "$runtime/.venv/bin/sc" --root "$runtime" "$@"
-}
+flotilla doctor
+flotilla server run
+flotilla client run
+flotilla session new 'investigate the failing test'
+flotilla session send SESSION_ID 'add a regression test' --queue
+flotilla session tail SESSION_ID --follow
+flotilla session archive SESSION_ID
 ```
+
+Use `flotilla --root CONFIG_DIRECTORY …` to select a config explicitly. The
+installed Mac client provides a `flotilla` wrapper in `~/.local/bin`. From a
+checkout, run the CLI with `uv run flotilla`. `doctor` checks the configured
+server or client. `server run` and `client run` run foreground services.
+
+Session commands operate on the running Mac or headless client. `session new`
+uses its configured repository and returns the session ID. On a headless worker,
+pass `--engine` and `--model` to select an engine and its native model ID.
+CLI sends use the configured send mode unless you pass `--queue` or `--steer`.
+For the exact commands and options, run `flotilla --help` or
+`flotilla session --help`.
 
 See [the validation record](docs/client-server-validation.md) for test and live deployment evidence. Design and original constraints: [SPEC.md](SPEC.md).
 
@@ -138,7 +128,7 @@ Quitting Conductor may kill its background shell jobs; the bridge does not rerun
 
 The native integration uses Conductor’s internal frontend services and validates them at attachment. App updates are allowed; an incompatible interface reports a reconnect/attachment error instead of switching to UI automation. See [the implementation and validation record](docs/conductor-native-bridge.md).
 
-`sc new`, `sc send`, and `sc archive` submit native commands through the running daemon. `sc doctor` checks its native attachment. Install/start the LaunchAgent before using those commands. The installer replaces the runtime source tree exactly, removing retired modules; `--prepare-only` builds a separate runtime without modifying the running service.
+On Mac, start the client before using session commands. `flotilla client install --prepare-only` builds a separate runtime for inspection. `flotilla doctor` checks native attachment.
 
 ## Development
 

@@ -1,8 +1,8 @@
 # Session runtime boundary
 
 Runtime contract **version 2** runs over transport version 2. Upgrade the server
-and its client together: runtime v1 peers are rejected. This change adds bounded
-replay and a completion gate; an older server must not consume the new client.
+and its clients together. Runtime v1 peers are rejected. Runtime v2 adds bounded
+replay and a completion gate.
 Conductor and the headless Claude/Codex worker implement the same session boundary.
 
 The server owns Slack credentials, authorization, thread bindings, delivery, and
@@ -64,10 +64,13 @@ before pickup acknowledgment. Resumption never uses a directory-global `--last`.
 
 The headless service owns process creation and serializes work per session. CLI
 commands use a private local socket rather than creating another process owner.
-Each session gets an isolated Git worktree. The worker stores queued inputs durably. Active turns accept steering through
-Claude’s bidirectional stream or the Codex app-server. Interactive reveal and
-approval replies require Conductor. Process exit alone does not establish a successful answer: a
-completion event and reconciliation of owned work are required.
+Each session gets an isolated Git worktree. The worker stores queued inputs durably.
+Codex steers the active native turn by ID. Claude steering can remain pending
+while a tool runs. A matching native replay confirms pickup. If the turn ends
+without that replay, the receipt becomes uncertain and the original result
+remains associated with the original input. Interactive reveal and approval replies
+require Conductor. A successful answer requires a completion event and
+reconciliation of owned work.
 
 Conductor cancellation targets the current native turn and pauses the queue.
 Its native API acknowledges a request, not terminal process exit; `requested`
@@ -81,6 +84,28 @@ worker crash, affected work enters attention and is not rerun automatically.
 Inspect the preserved native conversation/worktree before deciding how to
 continue; there is no automated ambiguous-launch reconciliation command yet.
 See [worker operation and qualification](headless-worker.md).
+
+## Add an adapter
+
+Add a client-side integration in this repository. It reuses Flotilla’s Slack
+pairing, private transport, and reply delivery. There is no plugin installer.
+
+1. Implement [`SessionRuntime`](../src/slack_conductor/runtime.py) with durable
+   command receipts, owned workspace/session bindings, normalized event replay, and
+   restart recovery. Report supported capabilities in `probe` and reject unsupported
+   operations with `Unsupported`.
+2. Register the adapter in [`local_runtime`](../src/slack_conductor/runtime_adapter.py),
+   [configuration validation](../src/slack_conductor/config.py),
+   [`flotilla client connect`](../src/slack_conductor/cli.py), and the
+   [pairing backend allowlist](../src/slack_conductor/pairing.py). Check how
+   [`client run`](../src/slack_conductor/remote_client.py) starts and stops the
+   adapter. Add local socket support if a separate service owns its processes.
+3. Exercise the paired route through Slack. The bridge defaults to steering
+   where advertised and otherwise queues. It uses capability flags for controls
+   such as stop and replies to approvals. If multiple engines or sessions have
+   different capabilities, extend [option validation](../src/slack_conductor/slack_app.py)
+   to use the relevant engine or session. Test a new session, an existing-session
+   follow-up, reconnect and replay, final Slack delivery, and archive.
 
 ## Coordinated rollout
 

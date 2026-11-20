@@ -1,8 +1,8 @@
 # Flotilla CLI
 
-`flotilla` operates the existing private server and Mac client on the **current host**. It does not administer a remote Daytona sandbox from your Mac. The `sc` command and the existing Slack app remain available.
+Run `flotilla` on the host running the server or client you want to operate. For a Daytona worker, run it inside the sandbox.
 
-For an existing installation, upgrade the server and client together: this client cannot connect to the older server protocol. Follow the [coordinated upgrade procedure](runtime-interface.md#coordinated-upgrade) before activating the new Mac service.
+For an existing installation, upgrade the server and client together: this client cannot connect to the older server protocol. Follow the [coordinated upgrade procedure](runtime-interface.md#coordinated-rollout) before activating the new Mac service.
 
 For a new personal profile, follow the [client pairing guide](connect-client.md).
 
@@ -35,22 +35,22 @@ Configuration lookup for commands other than `init` is: explicit `--root` (direc
 | `init --server-url URL --token-file PATH --repo PATH --workspace-root PATH` | Create one Mac client config from existing credentials; no pairing wizard. |
 | `config validate` | Validate config and shared token file. |
 | `status`, `doctor`, `monitor [--watch] [--interval SECONDS]` | Show local health; `doctor` exits nonzero on unhealthy or unknown checks. `monitor` records local warning and recovery transitions in private `monitoring.json` and rotating `monitoring.log`. Watch interval defaults to 10 seconds and must be at least 5. |
+| `client connect` | Pair a Mac or headless client using a Slack DM. See the [pairing guide](connect-client.md). |
 | `client run`, `client install [--prepare-only]`, `client uninstall` | Run in the foreground, or manage the Mac user LaunchAgent. |
 | `client start`, `client stop`, `client restart`, `client status`, `client logs [--lines N] [--follow]` | Operate the installed client on this Mac and read its local `daemon.log`. |
 | `server run` | Run a server in the foreground on this host. |
 | `server start`, `server stop`, `server restart`, `server status`, `server logs [--lines N] [--follow]` | On the managed `/data/config` server host, use the existing supervisor's `HOLD` file for control and read the local log. On an ordinary host, start/stop/restart are unsupported; `status` says unmanaged and `server run` is available. No arbitrary process is signaled. |
 | `session list`, `session show ID`, `session tail ID [--after CURSOR] [--follow]` | Read local client sessions and events. |
-| `session new PROMPT [--repo PATH] [--queue\|--steer] [--command-id ID]`, `session send ID PROMPT [--queue\|--steer] [--command-id ID]` | Create or send through the local Conductor adapter. The repository must match config. Command IDs can make retries durable. |
-| `session archive ID [--command-id ID]` | Archive the session through Conductor. |
-| `session open ID`, `session stop ID` | Parsed for capability discovery, but **unsupported** by the current Conductor adapter. Open the session or stop the agent in Conductor. |
+| `session new PROMPT [--repo PATH] [--queue\|--steer] [--command-id ID]`, `session send ID PROMPT [--queue\|--steer] [--command-id ID]` | Create or send through the configured local runtime. The repository must match config. Reuse the same command ID and arguments to retry a request. `session new` also accepts `--model MODEL` and, on headless clients, `--engine {claude,codex}`. |
+| `session archive ID [--command-id ID]` | Archive the session through the configured runtime. |
+| `session stop ID` | Cancel work on the current session. |
+| `session open ID`, `session respond ID QUESTION_ID` | Reveal a Conductor session or respond to one of its outstanding requests. |
 
-Session commands require a client config and the local Conductor adapter. The current adapter reports reveal/open, interrupt/stop, and approval responses as unsupported capabilities. A running background job by itself is informational in monitoring.
+Session commands require a client config. Conductor controls its existing native session. Headless session commands connect to the running worker through its private local socket.
 
 By default, commands print readable text. `status` and `doctor` show a health summary and each check; `monitor` also shows incident transitions. Session commands show session IDs, details, and events with nested fields indented. Other structured command results use labeled fields. Text output is safe to display in a terminal and does not add color when redirected.
 
 Use `--json` for scripts. It is a global option accepted before or after a subcommand. Its output shape is unchanged: one-shot success prints `{"ok":true,"data":…}`; failure prints `{"ok":false,"error":{"code":…,"message":…}}`. Exit codes are `0` for success, `1` for a command or health failure, `2` for usage, and `130` for interruption. `session tail --follow --json` and `monitor --watch --json` emit one JSON object per update. Foreground `run` and raw `logs --follow` reject `--json`; follow logs stream plain text.
-
-This pilot does not include a public package, pairing, profiles, devices, or a setup wizard. Those designs are tracked separately in [the Flotilla design record](flotilla-design.md).
 
 ## Runtime controls and headless engines
 
@@ -73,7 +73,8 @@ kind. Structured Codex permission grants and MCP form responses require
 from a generic approval. Conductor stop returns `requested` until observation
 confirms rest and pauses its queue. Resume that queue in Conductor when appropriate.
 
-`--engine` applies only to a headless worker configuration. Headless commands
-contact the running worker service over a private local socket. Its default send
-mode is queue, and `--steer`, interactive open, and native question replies are
-unsupported. `session tail` drains bounded replay pages even without `--follow`.
+`--engine` applies to headless workers. CLI sends use the client’s `send_mode` unless
+you pass `--queue` or `--steer`. Codex and Claude both support native steering.
+On an idle headless session, a steer starts a new turn. Headless stop cancels the
+active turn and clears queued work. Interactive open and native question replies
+require Conductor. `session tail` drains bounded replay pages even without `--follow`.

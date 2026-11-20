@@ -13,8 +13,8 @@ the remote boundary.
   receives a session/workspace mapping, not access to the Slack database.
 - The poller consumes session observations through named methods rather than SQL.
   `test_observation_contract.py` delivers statuses and a recovered final answer
-  with an observation provider that has no database/query interface. This is a
-  seam used by the current remote client; it is not the final generic runtime protocol.
+  with an observation provider that has no database/query interface. The paired
+  server adapts runtime v2 observations to that poller interface.
 - Native schema and SDK details belong in adapter tests. Keep broad behavior
   assertions about emitted replies, target sessions, preserved settings, and
   recovery, rather than private method call order or incidental table layout.
@@ -37,10 +37,11 @@ the remote boundary.
 | Personal notifications, lost acknowledgment, restart, attention episodes | `test_notifications.py`, `test_notification_lifecycle.py` |
 | Configuration, credentials, startup failure cleanup, launchd installation | `test_config.py`, `test_runtime_startup.py`, `test_service.py` |
 | Remote authentication, receipts, reconnection, offline admission, file transfer | `test_remote_*.py` |
+| Headless process protocols, permissions, queue/steer, transport and restart | `test_headless_*.py`, `test_claude_stream.py`, `test_worker_*.py` |
+| Paired-user routing and collaborator delivery | `test_multiplayer_delivery.py`, `test_slack_routing.py` |
 | Server supervision and state export/import | `test_server_supervision.py`, `test_state_migration.py` |
 
-`tests/support.py` contains common test setup; test modules do not import one
-another. Disposable SQLite databases test real persistence. Injected clocks and
+`tests/support.py` contains shared test doubles and helpers. Disposable SQLite databases test real persistence. Injected clocks and
 recording Slack/native boundaries avoid live accounts and production sessions.
 The native HTTP tests use ephemeral loopback ports and close their servers.
 Yield fixtures close shared SQLite connections, and resource/unraisable warnings
@@ -77,16 +78,16 @@ on main, prevents force-push/deletion, and has no admin or app bypass. It does n
 require another reviewer for this personal project. It uses the same aggregate
 check pattern as TTD, without copying TTD's organization-specific bypass actors.
 
-The JSON is a proposed configuration. Use GitHub CLI from a checkout to inspect
-the active repository rules before applying it.
+The repository enforces this ruleset on `main`. Inspect the effective rules or
+look up the ruleset ID from a checkout:
 
 ```sh
+gh api 'repos/{owner}/{repo}/rules/branches/main'
 gh api 'repos/{owner}/{repo}/rulesets'
-gh api --method POST 'repos/{owner}/{repo}/rulesets' --input .github/main-ruleset.json
 ```
 
-If this named ruleset already exists, update its ID with PUT rather than creating
-a duplicate. Read it back after applying and confirm the effective main rules.
+When changing the policy, update the existing ruleset by ID and verify
+the effective rules again.
 A failed disposable PR should show the required `CI` check as failing and merging
 as blocked; a fixed revision should become eligible. Do not merge the canary.
 
