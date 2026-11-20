@@ -1,8 +1,10 @@
-# Conductor for Slack
+# Flotilla
 
-The current private, single-owner deployment runs the Slack server on Daytona and a native Conductor client on the Mac. It uses the existing **Conductor** Slack app and keeps the same thread, queue, steer, notification, and file behavior. The Mac connects outbound to the server; it still runs Conductor and the agent. See the [client/server deployment and rollback guide](docs/client-server-deployment.md) and [validation record](docs/client-server-validation.md). The broader **Flotilla** multiplayer and plugin design remains a [future plan](docs/flotilla-design.md).
+![Flotilla's three blue boats](assets/flotilla/logo.svg)
 
-A personal Slack app that drives the local Conductor Mac app. Mention **@Conductor** or DM it to create a TTD workspace. Mention **@Conductor** on every channel follow-up to continue the same session; ordinary thread conversation is ignored. Direct messages do not require a mention. Agent results replace a status message in the thread. You can open and continue the same workspace in Conductor.
+Mention **@flotilla** in Slack or send it a DM to start an agent in your configured repository. In a channel, mention **@flotilla** on each follow-up to continue the thread’s session. Flotilla edits its status message as the agent works and delivers the answer and files in that thread.
+
+With the Conductor client, the agent runs on your Mac and you can open the same workspace in Conductor. The Mac connects outbound to the Slack server, which can run on Daytona. See the [deployment and rollback guide](docs/client-server-deployment.md) and [validation record](docs/client-server-validation.md).
 
 The bot always sends the configured owner a fresh DM when a reply reaches **Done**, **Failed**, or **Needs attention** (including questions and permission/plan requests). Each DM contains the task and a link to the original reply. Completion waits for background work and final files/pages; superseded steers and historical completed replies do not generate completion alerts. Follow up in the original thread; replies to notification DMs show a link back and do not create an agent. There is no notification preference or opt-out command.
 
@@ -64,20 +66,20 @@ replacing the running client. There is no `--mode` installer flag.
 
 For a new Slack app installation, use `slack-manifest.json` and put the variables
 from `.env.example` in the server's private `.env`, never on the Mac client.
-The existing Conductor Slack app requires no reinstall for this runtime change.
+An existing installation can use the same Slack app and bot user ID. Update its display name and bot name to match the manifest, then upload the [Flotilla app icon](assets/flotilla/slack-icon.png).
 
 ## Use
 
-Invite **Conductor** to the channel first, then:
+Invite **Flotilla** to the channel and mention it in a message.
 
 ```text
-@Conductor [opus][high] investigate this bug
-@Conductor [queue] also add a focused regression test
-@Conductor [steer] stop that approach and inspect the API contract first
-@Conductor [astra][max][fast] continue with this model
-@Conductor [verbose] include tool activity in the thread
-@Conductor [close]
-@Conductor [new] start a fresh workspace for the next task
+@flotilla [fable][high] investigate this bug
+@flotilla [queue] also add a focused regression test
+@flotilla [steer] inspect the API contract first
+@flotilla [new][astra][max][fast] start a session with this model
+@flotilla [verbose] include tool activity in the thread
+@flotilla [close]
+@flotilla [new] start a fresh workspace for the next task
 ```
 
 The defaults are Fable 5.2, high effort, and steering. A follow-up while the agent is working goes into its running turn; `[queue]` waits and starts a separate turn afterward. An idle agent starts either kind immediately. Model tokens include `[fable]` → Fable 5.2, `[haiku]` → Haiku 5.5 (1M), `[astra]` → GPT-6 Astra, `[sol]` → GPT-6.1 Sol, `[terra]` → GPT-5.6 Terra, `[luna]` → GPT-6 Luna, `[sonnet]` → Sonnet 5.5, and `[alpha]` → OpenCode Zen's Union Alpha Free. Fable 5.2 supports `[fast]` and effort through `[ultracode]`; Haiku 5.5 supports effort through `[max]` and standard speed. Alpha uses Conductor's OpenCode integration through ACP, independent of picker favorites; effort uses the provider default and fast mode is unavailable. Existing installations with a `[models]` table in `config.toml` must update their aliases there; the table overrides these defaults. Model selection applies when a session starts; use `[new][fable]` or `[new][haiku]` to select the new models from an existing thread. Explicit Fable 5.1 and Haiku 4.5 labels remain supported for existing sessions and custom aliases.

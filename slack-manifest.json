@@ -1,11 +1,11 @@
 {
   "display_information": {
-    "name": "Conductor",
-    "description": "Sameer's personal bridge to local Conductor workspaces",
-    "background_color": "#252525"
+    "name": "Flotilla",
+    "description": "Run coding agents from Slack and follow their work in the thread.",
+    "background_color": "#2359df"
   },
   "features": {
-    "bot_user": {"display_name": "Conductor", "always_online": true},
+    "bot_user": {"display_name": "flotilla", "always_online": true},
     "app_home": {"home_tab_enabled": false, "messages_tab_enabled": true, "messages_tab_read_only_enabled": false}
   },
   "oauth_config": {

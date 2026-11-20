@@ -32,7 +32,7 @@ class Notifications:
                 prompt = row["prompt"]
                 if prompt.startswith("[slack]"):
                     prompt = prompt.partition("\n\n")[2]
-                title = " ".join(prompt.split())[:120] or "Conductor session"
+                title = " ".join(prompt.split())[:120] or "Flotilla session"
                 key = str(uuid.uuid5(uuid.NAMESPACE_URL, f"notice:{row['event_key']}:{seq}"))
                 conn.execute(
                     "INSERT OR IGNORE INTO notifications "
