@@ -7,7 +7,7 @@ The server's authenticated `/status` endpoint returns the same health snapshot. 
 | Check | Warning condition |
 | --- | --- |
 | Server runtime and Slack | The running service reports either as not ready; a missing or stale service report is unknown. |
-| Client remote link and native attachment | Remote status is older than 60 seconds or not connected; native heartbeat is older than 5 seconds or not ready. Missing status is unknown. |
+| Client remote link and adapter readiness | Remote status is older than 60 seconds or disconnected. The Mac client checks its native attachment heartbeat with a 5-second freshness window. The headless client checks worker readiness through the private runtime socket. |
 | Service | The daemon lock is present but unheld. Missing lock is unknown. |
 | Event backlog | More than 100 pending events, oldest pending event over 10 minutes, or a failed event within the last day. |
 | Slack delivery | More than 100 deliveries in progress, a failed status within the last day, or one `delivering` status still present after 10 minutes of monitor samples. |

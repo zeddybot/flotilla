@@ -10,13 +10,16 @@ Open Conductor, add the repository you want the agent to work in, and sign in to
 
 ```sh
 uv sync --frozen
-uv run flotilla client connect wss://YOUR-SERVER --profile mac --repo /path/to/your/repo
+uv run flotilla --root "$HOME/.config/flotilla" client connect wss://YOUR-SERVER \
+  --profile laptop --repo /path/to/your/repo
 ```
+
+Choose any available profile name. This guide uses `laptop`. Teammates can also use `mac`. For the server owner, `mac` is reserved for the original client.
 
 Send the displayed `connect <code>` in a direct message to Flotilla from your own Slack account. The code expires after ten minutes. Return to the same checkout and finish setup.
 
 ```sh
-uv run flotilla client connect --check
+uv run flotilla --root "$HOME/.config/flotilla" client connect --check
 uv run flotilla --root "$HOME/.config/flotilla" client install
 uv run flotilla --root "$HOME/.config/flotilla" doctor
 ```
@@ -25,11 +28,12 @@ The client starts at login. Allow its Python interpreter under macOS System Sett
 
 ## Pair a headless Daytona client
 
-Use a separate sandbox with your repository, the chosen engine CLI and its own working sign-in. Run the following inside the sandbox, from a checkout of the same Flotilla release. Choose `claude` or `codex` and the permission policy suitable for that sandbox.
+Run this Codex example in a dedicated, isolated Daytona worker with the repository and its own engine sign-in. The [Flotilla worker image](headless-worker.md) sets `FLOTILLA_ISOLATED_WORKER=1`. The example uses that isolated worker as the execution boundary because Daytona’s standard container can block Codex’s inner sandbox. On other hosts, use a policy supported by the host. The general default is `read-only`.
 
 ```sh
 uv run flotilla --root /data/config client connect wss://YOUR-SERVER \
   --profile daytona --runtime-adapter headless --engine codex \
+  --engine-permission-policy external-sandbox \
   --repo /data/repos/project --workspace-root /data/workspaces --state-dir /data/state
 ```
 
@@ -56,7 +60,7 @@ Mention `@flotilla` in a channel where the app is a member. For example, `@floti
 
 The first registered person to summon Flotilla owns the session. Other registered people in the thread can send prompts that run with the owner’s agent credentials and repository access. Only the owner can respond to approvals or questions, interrupt work, close the session, or start a replacement. An offline client keeps its outstanding requests. Existing threads keep their original client when you change your default.
 
-DM `profiles` to list your clients, `default mac` to choose the default for new threads, or `disconnect daytona` to disconnect that credential. Use `[questions]` in the original thread to see outstanding requests. Flotilla sends the details to the owner privately. Use `[haiku]`, `[sonnet]`, `[opus]`, `[fable]`, `[luna]`, `[terra]`, `[sol]`, or `[astra]` to select a model on a Mac or headless profile. Model availability depends on the signed-in account. On a headless profile you can also specify a native model ID, such as `[model:gpt-6.2-sol]`. Choose the engine, model and effort when starting a session. To change them in an existing thread, start a fresh session with `[new]`.
+DM `profiles` to list your clients, `default <profile>` to choose the default for new threads (for example, `default laptop` or `default mac` if that profile exists), or `disconnect daytona` to disconnect that credential. Use `[questions]` in the original thread to see outstanding requests on Conductor. Flotilla sends the details to the owner privately. Use `[haiku]`, `[sonnet]`, `[opus]`, `[fable]`, `[luna]`, `[terra]`, `[sol]`, or `[astra]` to select a model on a Mac or headless profile. Model availability depends on the signed-in account. On a headless profile you can also specify a native model ID, such as `[model:gpt-6.2-sol]`. Choose the model and effort when starting a session. To change them in an existing thread, start a fresh session with `[new]`.
 
 ```text
 @flotilla [profile:daytona][sol][high] investigate the failing test
