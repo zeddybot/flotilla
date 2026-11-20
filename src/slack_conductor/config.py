@@ -59,6 +59,8 @@ class Config:
                 if key == "remote_token_file" and not path_value.is_absolute():
                     path_value = root / path_value
                 data[key] = path_value.resolve()
+        if data.get("runtime_adapter") == "headless":
+            data.setdefault("send_mode", "queue")
         cfg = cls(**data)
         if cfg.send_mode not in {"queue", "steer"}:
             raise ValueError("send_mode must be queue or steer")

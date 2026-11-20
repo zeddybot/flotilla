@@ -3,6 +3,7 @@
 import json
 import subprocess
 from pathlib import Path
+from unittest.mock import Mock
 
 from slack_conductor import cli, cli_config, cli_sessions
 from slack_conductor.config import Config
@@ -141,6 +142,26 @@ def test_session_tail_uses_cursor(monkeypatch):
 
     monkeypatch.setattr(cli_sessions, "runtime_for_cli", lambda *_: FakeRuntime())
     assert list(cli_sessions.tail(Config(), "owned", after=7)) == [{"type": "text", "cursor": 8}]
+
+
+def test_cli_engine_override_uses_the_selected_engines_defaults(monkeypatch, tmp_path):
+    runtime = Mock()
+    runtime.create.return_value = {"session_id": "session"}
+    monkeypatch.setattr(cli_sessions, "runtime_for_cli", lambda config: runtime)
+    config = Config(
+        runtime_adapter="headless",
+        repo=tmp_path,
+        engine="claude",
+        engine_model="opus",
+        engine_effort="max",
+        send_mode="steer",
+    )
+
+    cli_sessions.new_session(config, "inspect", engine="codex")
+
+    spec = runtime.create.call_args.args[1]
+    assert (spec["engine"], spec["model"], spec["effort"]) == ("codex", None, None)
+    assert runtime.submit.call_args.args[-1] == {"send_mode": "steer"}
 
 
 def test_send_retry_reuses_message_and_run_ids(monkeypatch):

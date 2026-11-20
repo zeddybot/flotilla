@@ -61,8 +61,13 @@ def _fake_engine(tmp_path):
         "args=sys.argv[1:]\n"
         "sid=args[args.index('--session-id')+1] if '--session-id' in args else args[args.index('--resume')+1]\n"
         "with open(os.environ['WORKER_ENGINE_CALLS'],'a') as f: f.write(json.dumps(args)+'\\n')\n"
+        "assert args[args.index('--input-format')+1] == 'stream-json'\n"
+        "assert '--replay-user-messages' in args\n"
+        "user = json.loads(sys.stdin.readline())\n"
+        "assert user['type'] == 'user' and user['message']['content']\n"
         "Path('artifact.txt').write_text('headless file bytes')\n"
         "print(json.dumps({'type':'system','subtype':'init','session_id':sid}),flush=True)\n"
+        "print(json.dumps({**user,'session_id':sid,'isReplay':True}),flush=True)\n"
         "print(json.dumps({'type':'assistant','session_id':sid,'message':{'content':[{'type':'text','text':'headless answer'}]}}),flush=True)\n"
         "print(json.dumps({'type':'result','session_id':sid,'result':'headless answer'}),flush=True)\n"
     )
@@ -156,6 +161,7 @@ def test_headless_worker_transports_queue_receipts_poller_files_and_reconnect(
             == sent
         )
         eventually(lambda: len(calls.read_text().splitlines()) == 2)
+        eventually(lambda: proxy.observe(sid, view="snapshot")["rest"]["confirmed"])
         assert (
             len(
                 [

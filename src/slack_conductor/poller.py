@@ -125,7 +125,27 @@ class Poller:
         for status in self.store.active():
             try:
                 if status["state"] == "waiting":
-                    pickup = self.db.pickup(status["session_id"], status["prompt"])
+                    sid, prompt = status["session_id"], status["prompt"]
+                    if hasattr(self.db, "receipt"):
+                        receipt = self.db.receipt(sid, prompt)
+                        state = receipt["state"]
+                        if state in {"rejected", "uncertain"}:
+                            text = (
+                                "The active turn could not accept steering."
+                                if state == "rejected"
+                                else "The engine did not confirm steering. Check the session before resending."
+                            )
+                            self.finish(status, text, "attention")
+                            continue
+                        if state == "pending" and status["latest"] != "steering":
+                            self.store.update(status["id"], latest="steering")
+                        pickup = (
+                            {"seq": receipt["seq"], "turn_id": receipt["segment_id"]}
+                            if state == "picked_up"
+                            else None
+                        )
+                    else:
+                        pickup = self.db.pickup(sid, prompt)
                     if pickup:
                         status = self.handoff(status, pickup)
                         self.store.update(
@@ -279,6 +299,8 @@ class Poller:
             text = render("attention", detail="message queued; queue paused in Conductor")
         elif status["note"].startswith("error:"):
             text = render("unconfirmed", status["note"], "send unconfirmed")
+        elif status["latest"] == "steering":
+            text = render("working", detail="steering submitted; waiting for engine pickup")
         else:
             text = render(
                 "queued" if status["latest"] == "queued" else "starting",

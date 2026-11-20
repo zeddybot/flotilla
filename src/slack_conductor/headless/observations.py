@@ -30,12 +30,12 @@ def observe(runtime, session_id, after=0, prompt=None, segment_id=None, view="al
             else None
         )
         latest = db.execute(
-            "SELECT id,state,result_seq FROM turns WHERE session_id=? AND pickup_seq IS NOT NULL "
+            "SELECT id,state,result_seq FROM turns WHERE session_id=? AND pickup_seq IS NOT NULL AND segment_id IS NULL "
             "ORDER BY pickup_seq DESC LIMIT 1",
             (session_id,),
         ).fetchone()
         later = db.execute(
-            "SELECT 1 FROM turns WHERE session_id=? AND pickup_seq>? AND id!=? LIMIT 1",
+            "SELECT 1 FROM turns WHERE session_id=? AND pickup_seq>? AND coalesce(segment_id,id)!=? LIMIT 1",
             (session_id, after, segment_id),
         ).fetchone()
         pending_jobs = [
@@ -91,9 +91,17 @@ def observe(runtime, session_id, after=0, prompt=None, segment_id=None, view="al
         if page
         else after,
         "receipt": {
-            "state": "picked_up" if receipt["pickup_seq"] else "queued",
+            "state": "picked_up"
+            if receipt["pickup_seq"]
+            else (
+                {"steering": "pending"}.get(receipt["state"], receipt["state"])
+                if receipt["segment_id"] is not None
+                else "queued"
+            ),
             "seq": receipt["pickup_seq"],
-            "segment_id": receipt["id"] if receipt["pickup_seq"] else None,
+            "segment_id": (receipt["segment_id"] or receipt["id"])
+            if receipt["pickup_seq"]
+            else None,
         }
         if receipt
         else {"state": "received", "seq": None, "segment_id": None}

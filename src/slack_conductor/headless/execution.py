@@ -3,7 +3,9 @@
 import json
 import threading
 
-from .engines import command, decode
+from .claude_stream import ClaudeStream
+from .codex_server import CodexServer, text_input
+from .engines import codex_notification, codex_thread_options, command, decode
 from .process_host import launch, terminate
 
 
@@ -56,11 +58,12 @@ class Execution:
         session = self._session(sid)
         first = not self._has_picked_up(sid)
         process = None
+        channel = None
         result_seen = False
         result_error = False
         needs_attention = False
         last_output = ""
-        native_known = session["native_id"] is not None
+        native_known = False
         try:
             with self._lock:
                 current = self._session(sid)
@@ -78,15 +81,19 @@ class Execution:
                     self.config,
                     session["engine"],
                     session["native_id"],
-                    turn["prompt"],
                     first=first,
                     spec=json.loads(session["spec"]),
                 )
-                process = launch(args, session["path"])
+                is_codex = session["engine"] == "codex"
+                process = launch(args, session["path"], duplex=True)
                 self._processes[sid] = process
-            if native_known:
-                self._pickup(turn)
-            for line in iter(lambda: process.stdout.readline(2_000_001), ""):
+                channel = CodexServer(process) if is_codex else ClaudeStream(process)
+            if is_codex:
+                lines = self._codex_lines(channel, session, turn)
+            else:
+                channel.start(turn["prompt"], turn["message_id"])
+                lines = channel.lines()
+            for line in lines:
                 if len(line) > 2_000_000:
                     raise RuntimeError("Headless event exceeded size limit")
                 native_id, event = decode(session["engine"], line)
@@ -95,15 +102,21 @@ class Execution:
                 except ValueError:
                     native = {}
                 if isinstance(native, dict):
+                    if native.get("isReplay") is True:
+                        with self._lock:
+                            self._reconcile_steers(sid)
                     message = native.get("message")
                     model = native.get("model") or (
                         message.get("model") if isinstance(message, dict) else None
                     )
                     if isinstance(model, str) and model:
                         with self.store.connect() as db:
+                            effective = {**json.loads(session["spec"]), "model": model}
+                            if "effort" in native:
+                                effective["effort"] = native["effort"]
                             db.execute(
                                 "UPDATE sessions SET effective=? WHERE id=?",
-                                (json.dumps({"model": model}), sid),
+                                (json.dumps(effective), sid),
                             )
                 if native_id:
                     if session["native_id"] and native_id != session["native_id"]:
@@ -114,8 +127,20 @@ class Execution:
                                 "UPDATE sessions SET native_id=? WHERE id=?", (native_id, sid)
                             )
                         native_known = True
-                        self._pickup(turn)
+                        with self._lock:
+                            if self._session(sid)["activity"] == "working":
+                                self._pickup(turn)
+                                self._active_turns[sid] = (
+                                    channel,
+                                    native_id,
+                                    native.get("turn_id"),
+                                    turn,
+                                )
                 if event and native_known:
+                    if event["kind"] == "result":
+                        with self._lock:
+                            self._reconcile_steers(sid)
+                            self._active_turns.pop(sid, None)
                     if event.get("kind") == "update":
                         for part in event.get("parts", []):
                             if part.get("kind") == "output":
@@ -128,6 +153,7 @@ class Execution:
                     if event["kind"] == "result":
                         result_seen = True
                         result_error = bool(event.get("error"))
+                        break
                     if event.get("kind") in {"job_started", "job_finished"} and event.get("job_id"):
                         with self.store.connect() as db:
                             db.execute(
@@ -139,13 +165,10 @@ class Execution:
                                     "active" if event["kind"] == "job_started" else "finished",
                                 ),
                             )
-            code = process.wait()
             if not native_known:
                 raise RuntimeError("Native session ID was not reported; launch needs attention")
             if not result_seen:
                 raise RuntimeError("Headless process ended without a completion event")
-            if code != 0 and not result_error:
-                raise RuntimeError("Headless process exited with a failure after its result event")
             with self.store.connect() as db:
                 pending_jobs = db.execute(
                     "SELECT count(*) FROM jobs WHERE session_id=? AND state='active'", (sid,)
@@ -168,11 +191,69 @@ class Execution:
                 if process is not None:
                     terminate(process)
             finally:
+                if channel:
+                    channel.close()
                 if process is not None and process.stdout is not None:
                     process.stdout.close()
                 with self._lock:
+                    self._reconcile_steers(sid)
                     self._processes.pop(sid, None)
+                    self._active_turns.pop(sid, None)
                 self._wake.set()
+
+    def _codex_lines(self, codex, session, turn):
+        codex.initialize()
+        spec = json.loads(session["spec"])
+        params = codex_thread_options(spec, session["path"])
+        native_id = session["native_id"]
+        if not params["model"]:
+            effective = json.loads(session["effective"]) if session["effective"] else {}
+            params["model"] = effective.get("model")
+            if not params["model"]:
+                available = codex.request("model/list", {"includeHidden": False})
+                params["model"] = next(
+                    (
+                        model["model"]
+                        for model in available.get("data", [])
+                        if model.get("isDefault")
+                    ),
+                    None,
+                )
+        if native_id:
+            params.update(threadId=native_id, excludeTurns=True)
+        resumed = codex.request("thread/resume" if native_id else "thread/start", params)
+        thread_id = resumed.get("thread", {}).get("id")
+        if (
+            not isinstance(thread_id, str)
+            or not thread_id
+            or (native_id and native_id != thread_id)
+        ):
+            raise RuntimeError("Codex did not return the expected thread identity")
+        started = codex.request(
+            "turn/start",
+            {
+                "threadId": thread_id,
+                "clientUserMessageId": turn["message_id"],
+                "input": text_input(turn["prompt"]),
+            },
+        )
+        turn_id = started.get("turn", {}).get("id")
+        if not isinstance(turn_id, str) or not turn_id:
+            raise RuntimeError("Codex did not return a turn identity")
+        yield json.dumps(
+            {
+                "type": "thread.started",
+                "thread_id": thread_id,
+                "turn_id": turn_id,
+                "model": resumed.get("model"),
+                "effort": resumed.get("reasoningEffort", spec["effort"]),
+            }
+        )
+        for source in codex.notifications():
+            event = codex_notification(source, thread_id, turn_id, resumed.get("model"))
+            if not event:
+                continue
+            yield json.dumps(event)
 
     def _has_picked_up(self, sid):
         with self.store.connect() as db:

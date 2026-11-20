@@ -1,15 +1,34 @@
 """Subprocess boundary: isolated cwd, process group, and bounded shutdown."""
 
+import json
 import os
+import selectors
 import signal
 import subprocess
+import time
 
 
-def launch(args, cwd):
+class Rejected(RuntimeError):
+    """The native engine rejected the request before accepting input."""
+
+
+def write_json_line(fd, message, deadline):
+    data = memoryview((json.dumps(message) + "\n").encode())
+    with selectors.DefaultSelector() as selector:
+        selector.register(fd, selectors.EVENT_WRITE)
+        while data:
+            try:
+                data = data[os.write(fd, data) :]
+            except BlockingIOError:
+                if not selector.select(max(0, deadline - time.monotonic())):
+                    raise TimeoutError("Headless stdin did not accept input")
+
+
+def launch(args, cwd, *, duplex=False):
     return subprocess.Popen(
         args,
         cwd=cwd,
-        stdin=subprocess.DEVNULL,
+        stdin=subprocess.PIPE if duplex else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         text=True,
@@ -18,27 +37,14 @@ def launch(args, cwd):
     )
 
 
-def terminate(process):
-    if getattr(process, "_flotilla_terminated", False):
-        return
+def _signal_group(process, sig):
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        os.killpg(process.pid, sig)
     except ProcessLookupError:
-        process.wait(timeout=2)
-        process._flotilla_terminated = True
-        return
-    try:
-        process.wait(timeout=1)
-    except subprocess.TimeoutExpired:
-        pass
-    # The leader may have exited while children still own the process group.
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+        return False
     except PermissionError:
-        # macOS can report EPERM for an empty, just-reaped group. Only ignore
-        # that race when a process inventory proves no live member remains.
+        # macOS may report EPERM for a group whose only remaining process is
+        # a zombie. Verify that no live member needs this signal.
         rows = subprocess.run(
             ["ps", "-axo", "pgid=,stat="], capture_output=True, text=True, check=True
         ).stdout.splitlines()
@@ -48,5 +54,19 @@ def terminate(process):
             if len(parts := line.split()) == 2
         ):
             raise
+        return False
+    return True
+
+
+def terminate(process):
+    if getattr(process, "_flotilla_terminated", False):
+        return
+    if _signal_group(process, signal.SIGTERM):
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+        # Children may still own the process group even after the leader exits.
+        _signal_group(process, signal.SIGKILL)
     process.wait(timeout=2)
     process._flotilla_terminated = True
