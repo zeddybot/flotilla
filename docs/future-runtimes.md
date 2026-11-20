@@ -1,10 +1,14 @@
-# Future clients, engines, and hosts: plan only
+# Future clients, engines, and hosts
+
+This record preserves the original headless-worker design. The Claude Code and
+Codex worker, pairing, and profile routing have since shipped. For current setup,
+see [Worker deployment](headless-worker.md) and [Pair a client](connect-client.md).
 
 The first proposed additional runtime is a dedicated Daytona worker containing
 Claude Code and Codex CLIs. This is separate from the always-on Slack server.
 The worker connects outbound using the session-runtime contract and owns its
 repository, agent credentials, process lifecycle, receipts, and event journal.
-No additional adapter or worker image is implemented in this change.
+
 
 The September follow-up explicitly permits a headless pilot. That is a scoped
 exception to the earlier design's requirement that every session be visible in
@@ -38,7 +42,7 @@ has been qualified; do not launch a replacement conversation to simulate it.
    permission bypass. Unsupported interactive questions must become actionable
    attention states, not an apparent hang or fabricated answer.
 
-## Engine commands to anchor the design
+## CLI examples from the original proposal
 
 Claude Code's print mode can emit structured streaming output:
 
@@ -55,14 +59,13 @@ codex exec --json 'prompt'
 codex exec resume SESSION_ID --json 'follow-up'
 ```
 
-These are architectural examples, not a deployment script or a parity claim.
-Check the pinned version's help and event schema during implementation. Relevant
-primary references are [Claude Code programmatic usage](https://code.claude.com/docs/en/headless)
+The current worker uses bidirectional Claude stream-json and the Codex app-server.
+The examples above show the one-shot commands considered during planning. Primary references are [Claude Code programmatic usage](https://code.claude.com/docs/en/headless)
 and [Codex noninteractive mode](https://learn.chatgpt.com/docs/non-interactive-mode).
 Claude and Codex JSON events differ; parsing JSON alone does not establish
 equivalent session, interruption, approval, or background-job semantics.
 
-## Qualification and subsequent reuse
+## Original qualification plan and follow-up ideas
 
 Use a disposable repository and validate create, explicit-ID resume, repeated
 prompt identities, durable queueing, text/tool events, actual model settings,
@@ -78,7 +81,7 @@ identity and reveal. Desktop clients such as Codex Desktop, Claude Desktop, or
 T3 Code each need independent control/recovery research. Support is a tested
 engine/host/version combination, not every combination of installed components.
 
-Before multiple workers, implement device identity/revocation, profile routing,
-ownership authorization, and per-session command serialization. Multiplayer and
-collaborator permissions remain separate work. Do not expand a single-owner
-token into an implicit multi-user trust model.
+Paired clients now have separate credentials and profile routing. The first
+Slack user to start a thread owns the session. Registered collaborators can
+submit prompts, while sensitive session controls remain owner-only. See
+[Start and share a session](connect-client.md#start-and-share-a-session).

@@ -20,9 +20,9 @@ The hosted preview proxy supports the intended long-lived client connection for 
 
 This did not test full sandbox/infrastructure restart, private-preview credential renewal, Slack Socket Mode, database durability, multi-day uptime, or load. Use heartbeats, reconnection, durable acknowledgments/replay, and process supervision. Disable auto-stop for an always-on container; VM auto-pause is separate.
 
-Daytona documents WebSocket upgrades and publishes a persistent-connection example with health checks and reconnection. Its example's 300-second client ping timeout is not a server-imposed maximum connection lifetime. No published hard maximum lifetime was found in the reviewed sources.
+At the time of the test, Daytona documented WebSocket upgrades and published a persistent-connection example with health checks and reconnection. Its example's 300-second client ping timeout is not a server-imposed maximum connection lifetime. No published hard maximum lifetime was found in the reviewed sources.
 
-Standard private-preview tokens rotate when a sandbox restarts. Signed URLs embed a token and have bounded expiry (documented default 60 seconds, maximum 24 hours). These mechanisms are separate from Flotilla's client/device authentication. Do not distribute Daytona organization API keys to clients.
+The private-preview tokens documented for this test rotated on sandbox restart. Signed URLs were documented with a 60-second default expiry and 24-hour maximum. These mechanisms are separate from Flotilla's client/device authentication. Do not distribute Daytona organization API keys to clients.
 
 ## Sources
 
@@ -31,4 +31,4 @@ Standard private-preview tokens rotate when a sandbox restarts. Signed URLs embe
 - [Persistence and lifecycle](https://www.daytona.io/docs/en/persistence/)
 - [Persistent WebSocket training example](https://www.daytona.io/docs/en/guides/reinforcement-learning/openenv-finqa/)
 
-The project core moved out of the public Daytona repository in 2026. Historical public proxy constants were not treated as evidence of current production connection limits; current documentation and the live test support the conclusions above.
+The project core moved out of the public Daytona repository in 2026. Historical public proxy constants were not treated as evidence of current production connection limits; the documentation available at the time and the live test support the conclusions above.

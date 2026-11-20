@@ -1,7 +1,8 @@
 # Public release preparation
 
-These checks cover publishing Flotilla's source, qualifying a release, and
-supporting users who install it.
+Use this checklist to qualify a new public Flotilla release and support users
+installing it. The [installation guide](connect-client.md) covers the released
+source checkout and client pairing.
 
 Before a public release:
 
@@ -9,16 +10,14 @@ Before a public release:
   workspace/user identifiers, internal links, logs, and setup defaults. Perform
   a deliberate secret/history scan; a clean working tree is not proof that
   history is safe. Decide whether to sanitize history or publish a clean export.
-- Rotate the previously exposed Slack bot and Socket Mode tokens. Sameer owns
-  that rotation. Install and validate replacements, then retire old credentials;
-  removing a token from a file does not revoke it.
+- Revoke any credential exposed during release preparation. Install and validate
+  replacement Slack credentials before retiring the old ones.
 - Decide the project license, ownership/contributor terms, dependency notices,
   name/package availability, and security-reporting contact. The working CLI
   name `flotilla` does not settle public naming or trademark questions.
-- Replace personal setup defaults with examples, document the single-owner
-  trust model and supported versions, and run a clean-machine install. Choose a
-  versioned distribution channel and upgrade/rollback policy; today's installer
-  requires a checkout or bundled installed runtime and `uv`.
+- Check setup examples for private defaults. Document the paired-client trust
+  model, supported versions, and upgrade and rollback steps. Verify a clean
+  install from the release checkout with `uv`.
 - Document public support boundaries, known capability gaps, contributor setup,
   issue reporting without secrets, and a minimal changelog/release process.
 - Confirm hosted GitHub Actions results for the release revision. Inspect the

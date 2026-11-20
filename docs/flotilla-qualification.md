@@ -1,7 +1,7 @@
-# Flotilla branch qualification, September 29
+# Flotilla branch qualification, September 29, 2026
 
-Validation covers the implementation in stack #70–77, before any coordinated
-production upgrade. The final runtime/CLI implementation is commit `99ca7cc`;
+This historical record covers stack #70–77, before the coordinated production
+upgrade. The runtime and CLI revision tested was commit `99ca7cc`;
 tests ran with the documentation layer applied. Subsequent qualification-note
 edits do not alter the validated implementation.
 
@@ -24,17 +24,15 @@ repository workflow's frozen dependency/test commands. The uploaded allowlist
 contained only source, tests, scripts, build metadata, and README; no local
 config or credentials were included. The final bundle's per-file hashes matched
 the local inputs. The disposable CI sandbox was deleted after downloading the
-evidence. No GitHub settings or production services were changed. Hosted Actions
-jobs remain blocked before execution by the account billing/spending limit;
-they did not pass. The stack maintenance pass found no review comments to address.
+evidence. No GitHub settings or production services changed during this run.
+The account billing limit blocked hosted Actions jobs before execution.
+The stack maintenance pass found no review comments to address.
 
 Private local artifacts are under `.context/flotilla/`: `ci-macos-final.log`,
 `macos312.xml`, `linux-9524b8102cac-*`, `live-status.json`, and
 `live-runtime-read.json`. They are intentionally not committed to git.
 
-This establishes automated regression and installation evidence, not a claim of
-zero possible regressions. The new version has not yet completed a production
-server/client cutover. Re-run a bounded end-to-end check of new/send, existing
-session continuation, queue/steer, background callbacks, file delivery, restart,
-and archive after the coordinated upgrade. Real sleep/wake, upgrade recovery,
-prolonged outages, and multi-day operation remain soak-test work.
+This run established automated regression and installation evidence. At the time, the
+production cutover and an end-to-end check of new and existing sessions, queueing
+and steering, background callbacks, file delivery, restart, and archive were
+still pending. See the [README](../README.md) for current operations.

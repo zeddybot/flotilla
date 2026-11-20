@@ -4,9 +4,8 @@ The September 28, 2026 pilot deployed the then-private Conductor Slack app with
 one Daytona server and one native Mac client.
 The [deployment guide](client-server-deployment.md) covers cutover and rollback.
 
-The qualified application source is commit
-`49163d8e519d9244aa3781af57d132fb8394d61f`. Later changes to this record and the
-README are documentation only. The installed Mac source, server source, and
+The pilot qualified commit
+`49163d8e519d9244aa3781af57d132fb8394d61f`. The installed Mac source, server source, and
 server wheel were checked against the release manifest. Private logs, hashes,
 JUnit results, and Slack evidence live under `.context/deployment` and are
 not committed.
@@ -60,10 +59,9 @@ Alpha works through the new deployment; do not count it as a pass.
 
 Actual macOS sleep/wake, a Conductor application upgrade/restart, multi-day
 Daytona durability, and a Slack-side network outage were not induced in this
-run. Existing behavior still applies: the Mac must be awake for execution;
-messages never received during a Slack outage have no automatic history
-backfill; lost plan-approval callbacks are not reconstructed. Slack and SQLite
-cannot provide an atomic exactly-once commit.
+run. The pilot required an awake Mac and had no automatic history backfill
+for messages missed during a Slack outage. See [Slack recovery](slack-recovery.md)
+for current behavior.
 
 For the pilot, the full local macOS/Python 3.12 run passed all 254 tests.
 Lint and formatting also passed. Graphite's merge dry run reported the pilot

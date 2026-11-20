@@ -25,8 +25,9 @@ favorites alone. A fresh attachment is established after a frontend reload or ap
 restart. Heartbeats run independently of commands. Commands and results are fenced
 by a host-issued generation and app process incarnation (PID plus launch time).
 
-The launchd daemon owns the server, attachment supervisor, Socket Mode connection,
-and status polling. Shutdown leaves the frontend installed. The daemon records its
+The Mac launchd client owns the local loopback dispatcher and attachment
+supervisor. The paired server owns Slack Socket Mode and Slack status polling.
+Client shutdown leaves the frontend installed. The client records its
 loopback address, token and generation in `native-attachment.json`, and the next
 daemon serves the same address so the frontend it inherited needs no bootstrap. A
 daemon whose `frontend.js` differs starts a new generation instead, which retires
@@ -177,5 +178,6 @@ Private fault scripts, transcript observations, and results are in the gitignore
 `.context/native-live` directory. Deliberately failed pre-fix test replies are kept
 in the archived threads as evidence; they are not counted as passing checks.
 
-The native integration is installed in the private launchd runtime. Plan-mode
-callback recovery and macOS sleep/wake are intentionally unqualified.
+The private launchd runtime was running the native integration at the end of
+this qualification. The run excluded recovery of lost plan-mode callbacks and
+macOS sleep/wake.

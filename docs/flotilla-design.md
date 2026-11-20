@@ -1,8 +1,8 @@
 # Flotilla: design decisions and discussion record
 
-Recorded September 9, 2026. This captures the product and architecture discussions that followed the personal Slack–Conductor bridge. It is a design document, not a claim that the multi-user system exists. The Slack app remains Conductor and owner-only. The September follow-up adds the `flotilla` CLI while preserving `sc`; see [the implemented CLI](flotilla-cli.md) and [runtime boundary](runtime-interface.md) for current branch behavior, which is separate from deployment status.
+Historical record from September 2026. At the time, the Slack app supported one owner on Conductor and the follow-up added the `flotilla` CLI alongside `sc`. See the [README](../README.md) and [client setup guide](connect-client.md) for current behavior.
 
-September 29 scope refinement: generalize the existing runtime, polish single-owner installation, and add local incident logs/CLI monitoring. Keep GitHub private and use local CI. Public-release preparation and additional clients/engines/hosts are plans only. The first future Daytona worker may deliberately be headless; [that plan](future-runtimes.md) records its visibility/capability limitations. The multi-user CLI proposal below remains a future design, not the current command reference.
+The September 29 scope called for generalizing the runtime, polishing single-owner installation, and adding local incident logs and CLI monitoring. Public release and additional clients were plans at the time. The [future runtime notes](future-runtimes.md) capture the original Daytona proposal.
 
 Operational follow-up: [Socket Mode reconnect incident and recovery](connection-incident.md).
 
@@ -103,7 +103,7 @@ Slack Socket Mode and the client-to-Flotilla transport are separate connections.
 
 ## CLI proposal
 
-One `flotilla` executable can operate a server or a client. This section is the broader future proposal; [the CLI guide](flotilla-cli.md) lists the implemented single-owner subset and exact command spelling.
+The September proposal used one `flotilla` executable for server and client operations. The commands below reflect that proposal. Run `flotilla --help` for implemented commands.
 
 `flotilla init` should guide the user through a server URL, browser authentication/pairing to prove their Slack identity, device naming, installed-tool detection, profile creation, default selection, and optional automatic startup. Each wizard step should also have a scriptable command.
 
@@ -155,9 +155,9 @@ Track connectivity, session lifecycle, message delivery, run activity, outcome, 
 
 Serialize session control actions; also serialize conflicting desktop automation across plugins that share focus/UI resources. Observation and unrelated terminal sessions should continue concurrently. Prefer native event streams; where the only reliable source is local polling, keep it incremental and bounded. Slack edits remain coalesced and respect rate limits.
 
-## Existing behavior: compatibility checklist
+## September 2026 compatibility checklist
 
-The [README](../README.md) and implementation are the current operational reference. [SPEC.md](../SPEC.md) also contains historical implementation notes and is not a future multi-user spec.
+This checklist records behavior and requirements from the original bridge. The [README](../README.md) and [client setup guide](connect-client.md) describe current operations.
 
 - Channel commands require explicit mention, including follow-ups; DMs do not. A mention in an existing bug-report thread can start a session. Current owner/workspace filtering and bot/subtype filtering remain in the personal adapter until deliberately replaced by shared-user authorization.
 - Current tokens are model aliases (`opus`, `sonnet`, `haiku`, `fable`, `astra`, `sol`, `terra`, `luna`), effort (`low`, `medium`, `high`, `xhigh`, `max`, `ultracode`), `fast`, `verbose`, `queue`, `steer`, `new`, and `close`. Aliases are configuration-driven. Tokens lead the prompt and are case-insensitive; unknown bracket text remains prompt text. Current parser stops at the first unknown bracket token.

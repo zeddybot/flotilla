@@ -160,7 +160,7 @@ by `[new]`. No active or pending test status remained. The temporary frontend ho
 was detached, the supervisor/bridge/transport processes stopped, and the connection
 credential removed. The ordinary production LaunchAgent was restored and verified
 running after the experimental Socket Mode connection closed. The existing
-Accessibility adapter remains the installed production path.
+Accessibility adapter was the installed production path after that experimental run.
 Private logs, IDs, tokens, raw Slack messages, and prototype scripts remain under
 `.context/direct-recovery/`, which is gitignored. The source report contains no
 credentials. No native Conductor database or app binary was edited directly.
