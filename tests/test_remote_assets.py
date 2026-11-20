@@ -243,3 +243,33 @@ def test_cleanup_queue_retries_offline_and_includes_zero_file_plan(tmp_path, bri
     restarted.maintenance()
     assert not store.rows("SELECT event_key FROM remote_asset_cleanup")
     assert not list((tmp_path / "client" / "remote_assets").glob("*/plan.json"))
+
+
+def test_remote_descriptor_can_only_initialize_transfer_metadata():
+    from slack_conductor.file_links import references
+    from slack_conductor.remote_assets import receive_plan
+
+    answer = "[report](report.txt)"
+    (ref,) = references(answer)
+    descriptor = {
+        "name": "report.txt",
+        "digest": "0" * 64,
+        "remote_snapshot": "a" * 64,
+        "length": 7,
+        "phase": "complete",
+        "permalink": "unexpected",
+        "snapshot": "unexpected",
+    }
+    result = receive_plan(
+        {"text": answer, "refs": [{**ref, "file": 0}], "files": [descriptor]}, answer
+    )
+    assert result["files"] == [
+        {
+            "name": "report.txt",
+            "digest": "0" * 64,
+            "remote_snapshot": "a" * 64,
+            "length": 7,
+            "phase": "new",
+            "image": False,
+        }
+    ]
