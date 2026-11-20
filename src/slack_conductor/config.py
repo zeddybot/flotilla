@@ -23,6 +23,7 @@ class Config:
     server_port: int = 8765
     client_id: str = "mac"
     pairing_allowed_users: list[str] = field(default_factory=list)
+    pairing_allow_workspace_members: bool = False
     remote_token_file: Path | None = None
     repo: Path = field(default_factory=Path.cwd)
     workspace_root: Path | None = None
@@ -81,6 +82,8 @@ class Config:
             for user_id in cfg.pairing_allowed_users
         ):
             raise ValueError("pairing_allowed_users must be a list of Slack user IDs")
+        if not isinstance(cfg.pairing_allow_workspace_members, bool):
+            raise TypeError("pairing_allow_workspace_members must be a boolean")
         cfg.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         return cfg
 

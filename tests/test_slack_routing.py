@@ -6,6 +6,7 @@ from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
+from slack_sdk.errors import SlackApiError
 
 from slack_conductor.conductor.journal import Unconfirmed
 from slack_conductor.config import Config
@@ -132,6 +133,100 @@ def test_direct_profile_commands_with_connector_attribution(tmp_path, message_sh
     assert command("3", "default daytona") == "`daytona` is your default for new threads."
     assert command("4", "disconnect daytona") == "Disconnected `daytona`."
     assert pairs.profiles("T1", "U2") == []
+
+
+@pytest.mark.parametrize(
+    ("workspace_enabled", "user", "member_fields", "allowed", "lookup"),
+    [
+        (True, "U3", {}, True, True),
+        (False, "U3", {}, False, False),
+        (True, "U3", {"team_id": "T2"}, False, True),
+        (True, "U3", {"is_stranger": True}, False, True),
+        (True, "U3", {"deleted": True}, False, True),
+        (True, "U3", {"suspended": True}, False, True),
+        (True, "U3", {"is_bot": True}, False, True),
+        (True, "U3", {"is_workflow_bot": True}, False, True),
+        (True, "W3", {"id": "U3", "enterprise_user": {"id": "W3", "teams": ["T1"]}}, True, True),
+        (True, "U3", {"enterprise_user": {"id": "W3", "teams": ["T2"]}}, False, True),
+        (True, "U3", {"id": "U4"}, False, True),
+        (True, "U2", {"team_id": "T2"}, True, False),
+        (False, "U1", {}, True, False),
+    ],
+)
+def test_workspace_pairing_checks_active_membership(
+    tmp_path, workspace_enabled, user, member_fields, allowed, lookup
+):
+    bridge, _ = setup(tmp_path)
+    bridge.config.pairing_allow_workspace_members = workspace_enabled
+    pairs = bridge.conductor.pairing
+    code = "a" * 32
+    pairs.register(code, hashlib.sha256(code.encode()).hexdigest(), "daytona", "conductor")
+    lookups = []
+
+    def users_info(method, **arguments):
+        lookups.append((method, arguments))
+        return {
+            "ok": True,
+            "user": {"id": user, "team_id": "T1", "is_bot": False, "deleted": False}
+            | member_fields,
+        }
+
+    def for_client(client_id):
+        state_dir = tmp_path / "clients" / client_id
+        state_dir.mkdir(parents=True)
+        return endpoint(replace(bridge.config, state_dir=state_dir))
+
+    bridge.slack.call = users_info
+    bridge.conductor.for_client = for_client
+    assert not Routing(bridge).receive(event(user, "1", f"connect {code}", direct=True))
+    assert lookups == ([("users_info", {"user": user})] if lookup else [])
+    assert bool(pairs.profiles("T1", user)) is allowed
+    assert bridge.store.next_event() is None
+    assert code not in bridge.slack.posts[-1][2]
+
+
+def test_workspace_lookup_failure_keeps_code_available_for_retry(tmp_path):
+    bridge, _ = setup(tmp_path)
+    bridge.config.pairing_allow_workspace_members = True
+    pairs = bridge.conductor.pairing
+    code = "a" * 32
+    pairs.register(code, hashlib.sha256(code.encode()).hexdigest(), "daytona", "conductor")
+
+    def users_info(*args, **kwargs):
+        raise SlackApiError("Slack API failed", {"error": "missing_scope"})
+
+    bridge.slack.call = users_info
+    router = Routing(bridge)
+    command = f"connect {code}"
+    assert not router.receive(event("U3", "1", command, direct=True))
+    assert pairs.profiles("T1", "U3") == []
+    assert bridge.slack.posts[-1][2] == "Slack membership could not be verified. Try pairing again."
+    assert bridge.store.next_event() is None
+    assert pairs.claim(code, "T1", "U3").name == "daytona"
+
+
+@pytest.mark.parametrize("invalid", ["team", "forged", "public", "history", "code"])
+def test_workspace_pairing_checks_command_before_member_lookup(tmp_path, invalid):
+    bridge, _ = setup(tmp_path)
+    bridge.config.pairing_allow_workspace_members = True
+    lookups = []
+    bridge.slack.call = lambda *args, **kwargs: lookups.append((args, kwargs))
+    command = f"connect {'a' * 32}"
+    body = event("U3", "1", command, direct=True)
+    if invalid == "team":
+        body["team_id"] = "T2"
+    elif invalid == "forged":
+        body = connector_dm("1", command)
+        body["event"]["user"] = "U3"
+        body["event"]["text"] += " forged"
+    elif invalid == "public":
+        body = event("U3", "1", f"<@B> {command}")
+    elif invalid == "code":
+        body["event"]["text"] = "connect invalid"
+
+    assert not Routing(bridge).receive(body, source="history" if invalid == "history" else "socket")
+    assert lookups == []
+    assert bridge.store.next_event() is None
 
 
 @pytest.mark.parametrize(

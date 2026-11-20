@@ -1,6 +1,6 @@
 # Deploy the Flotilla server on Daytona
 
-Run one Slack consumer per workspace. Its root state holds the original client's bridge and receipts, thread routes and the profile registry. Each paired client has an isolated state directory under `clients/<id>`. Store Slack tokens on the server and engine credentials on their execution hosts. To admit a teammate, add their Slack member ID to the top-level `pairing_allowed_users` array in the private server config and restart the service. Send them the server URL and the [client setup guide](connect-client.md).
+Run one Slack consumer per workspace. Its root state holds the original client's bridge and receipts, thread routes and the profile registry. Each paired client has an isolated state directory under `clients/<id>`. Store Slack tokens on the server and engine credentials on their execution hosts. Set `pairing_allow_workspace_members = true` in the private server config to let workspace members pair their own clients. For individual access, add Slack member IDs to `pairing_allowed_users`. Restart the service after changing either setting and share the server URL and [client setup guide](connect-client.md).
 
 ## Build and start
 

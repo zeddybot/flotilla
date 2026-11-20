@@ -9,6 +9,10 @@ model = "Fable 5.2"
 effort = "high"
 send_mode = "steer"
 
+# Server-only pairing settings
+pairing_allowed_users = []
+pairing_allow_workspace_members = false
+
 [models]
 opus = "Opus 5.5"
 sonnet = "Sonnet 5.5"
