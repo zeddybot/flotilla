@@ -1,9 +1,9 @@
-# slack-conductor
+# Original slack-conductor specification
 
 > Historical specification: this records the original Accessibility-driven design.
-> The current implementation uses the [native Conductor bridge](docs/conductor-native-bridge.md).
-> Use that document for current architecture and recovery behavior, and the
-> [README](README.md) for installation and operation.
+> Flotilla now supports paired Conductor and headless clients. See the
+> [runtime interface](docs/runtime-interface.md) for current architecture and the
+> [setup guide](docs/connect-client.md) to pair a client.
 
 A personal Slack bot that drives the **local** Conductor Mac app. `@bot` in a Slack channel or a DM creates a Conductor workspace and starts an agent turn; explicitly mentioned replies in the channel thread continue that agent (DM replies need no mention); the agent's output comes back to the thread; the session stays a normal Conductor session you can take over in the app.
 
