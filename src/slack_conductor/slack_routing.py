@@ -11,7 +11,7 @@ from .store import Store
 
 CONNECT_GUIDE = (
     "To connect a client, follow the "
-    "<https://github.com/zeddybot/slack-conductor/blob/main/docs/connect-client.md|setup guide>, "
+    "<https://github.com/zeddybot/flotilla/blob/main/docs/connect-client.md|setup guide>, "
     "run `flotilla client connect`, then DM me `connect <code>`."
 )
 LEGACY_NAME = "mac"

@@ -1,8 +1,8 @@
 # Testing and merge protection
 
-The current implementation is a single-owner Slack server and native Mac client.
-The generalized runtime/plugin contract remains follow-up work. These tests
-protect observable behavior across the remote boundary.
+Flotilla routes Slack threads to personal native Mac and headless clients.
+These tests cover Slack delivery, client routing, and runtime behavior across
+the remote boundary.
 
 ## Boundaries to preserve
 
@@ -66,7 +66,7 @@ Accessibility permission, actual model availability, or sleep/wake behavior.
 
 ## Required CI and Graphite
 
-The stable required check is `CI`, emitted by GitHub Actions (app ID 15368). It
+GitHub Actions (app ID 15368) publishes the aggregate check as `CI`. It
 runs even when dependencies fail and succeeds only when **every** test matrix
 entry and lint job succeeds. Failed, cancelled, or skipped dependencies cannot
 produce a successful gate. PRs run without path filters; main pushes and
@@ -77,14 +77,12 @@ on main, prevents force-push/deletion, and has no admin or app bypass. It does n
 require another reviewer for this personal project. It uses the same aggregate
 check pattern as TTD, without copying TTD's organization-specific bypass actors.
 
-Checking in this JSON **does not activate protection**. On September 11, 2026,
-GitHub rejected ruleset and branch-protection access for this private repository
-with HTTP 403: the owning account needs GitHub Pro. Keep the repository private.
-After upgrading, inspect existing rules before creating this rule:
+The JSON is a proposed configuration. Use GitHub CLI from a checkout to inspect
+the active repository rules before applying it.
 
 ```sh
-gh api repos/zeddybot/slack-conductor/rulesets
-gh api --method POST repos/zeddybot/slack-conductor/rulesets --input .github/main-ruleset.json
+gh api 'repos/{owner}/{repo}/rulesets'
+gh api --method POST 'repos/{owner}/{repo}/rulesets' --input .github/main-ruleset.json
 ```
 
 If this named ruleset already exists, update its ID with PUT rather than creating

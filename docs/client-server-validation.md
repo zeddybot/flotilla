@@ -1,8 +1,7 @@
 # Single-owner client/server validation
 
-The September 28, 2026 pilot is live: the existing private Conductor Slack app
-uses one Daytona server and one native Mac client. No rebrand, multiplayer,
-additional client implementation, or repository visibility change is included.
+The September 28, 2026 pilot deployed the then-private Conductor Slack app with
+one Daytona server and one native Mac client.
 The [deployment guide](client-server-deployment.md) covers cutover and rollback.
 
 The qualified application source is commit
@@ -19,7 +18,7 @@ not committed.
 | Daytona Linux, Python 3.12.14 | 254 passed; Ruff check and format passed. Final source matches the workspace across 76 code, test, and lockfile paths. |
 | Daytona Linux, Python 3.14.7 | 254 passed; Ruff check and format passed. |
 | Focused Mac checks | Remote file failures/transport, state migration, and supervisor tests passed. No full suite was run locally. |
-| GitHub Actions | Hosted jobs never started because account payments failed or the spending limit was reached. Local validation is the authorized merge path; the proposed ruleset is not active. |
+| GitHub Actions | A billing limit prevented the hosted jobs from starting during the pilot. The pilot merge used local validation. |
 | PR feedback | No actionable inline, review-body, or issue feedback across PRs 59–67 at the final audit. |
 
 Automated coverage includes owner/mention admission, duplicate commands,
@@ -50,11 +49,6 @@ workspaces were archived after testing.
 | Authentication | Unauthenticated application requests and Daytona reserved ports rejected access. The Mac runtime has no Slack `.env`; it uses a separate bearer token. |
 | Backup and restore | A quiesced post-cutover export restored successfully with SQLite integrity `ok`: 93 threads, 400 events, 396 statuses, 230 notification rows, no pending events or active statuses. The archive is stored off Daytona. |
 
-Representative private Slack threads:
-[existing thread, queue, restart](https://prodexlabs.slack.com/archives/D0C0HLKET9A/p1790644259601669),
-[offline admission, files, steer](https://prodexlabs.slack.com/archives/D0C0HLKET9A/p1790645189257709),
-[background callback, new mapping, settings](https://prodexlabs.slack.com/archives/D0C0HLKET9A/p1790645728182649).
-
 ## Remaining qualification and external dependencies
 
 Alpha did not produce a result. The command reached a native ACP session with
@@ -71,12 +65,9 @@ messages never received during a Slack outage have no automatic history
 backfill; lost plan-approval callbacks are not reconstructed. Slack and SQLite
 cannot provide an atomic exactly-once commit.
 
-GitHub's hosted jobs did not start because of account billing. The repository's
-proposed CI ruleset is not active, and Graphite's merge dry run reported the stack
-eligible. The full local macOS/Python 3.12 run subsequently passed all 254 tests,
-as did lint and formatting. Merge was authorized using local validation while
-hosted CI is unavailable. Passing these checks does not establish zero possible
-regressions.
+For the pilot, the full local macOS/Python 3.12 run passed all 254 tests.
+Lint and formatting also passed. Graphite's merge dry run reported the pilot
+stack eligible, and the merge was authorized on the local results.
 
 The subsequent server/client-only change removes `mode = "local"`, `sc daemon`,
 the installer's mode selector, and the legacy local-rollback export flag. Its

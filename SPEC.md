@@ -71,7 +71,7 @@ Leading bracket tokens on the mention text, any order, case-insensitive. Sticky 
 | `[close]` | Archive the thread's workspace. |
 | `[verbose]` | Also post one line per tool call instead of only editing the status. |
 
-Defaults live in `config.toml`: `model = "Fable 5.1"`, `effort = "high"`. The repo is fixed: every workspace is created in `/Users/sameer/Documents/work/prodex/ttd`; there is no per-message repo selection.
+Defaults live in `config.toml`: `model = "Fable 5.1"`, `effort = "high"`. The bridge creates every workspace in one configured local repository.
 
 Model and effort are **best effort**: the bridge tries to set them, verifies from `sessions`, and if Conductor ends up elsewhere it says so in the status message and proceeds. A wrong model never blocks a turn.
 

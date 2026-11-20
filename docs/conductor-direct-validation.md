@@ -66,13 +66,6 @@ arbitrary process failures, disk failures, or every third-party agent error.
 | Draft persistence | A separate draft set and flushed through Conductor's native draft service, plus its attachment, survived cold restart. The earlier DOM-input fixture was not a valid persistence test and is not used to claim crash-safe user typing. |
 | Close/new | `[close]` archived a busy workspace with queued work. An ordinary follow-up was rejected. `[new][luna]` created a different session and completed successfully. |
 
-Selected evidence threads:
-
-- [Luna: baseline, pause, reload, and binding](https://prodexlabs.slack.com/archives/D0C0HLKET9A/p1789086104104999)
-- [Fable: queue, questions, files, permissions, and background work](https://prodexlabs.slack.com/archives/D0C0HLKET9A/p1789086134079369)
-- [Terra: delivery faults, close, and new](https://prodexlabs.slack.com/archives/D0C0HLKET9A/p1789086414706159)
-- [Astra: notification crash and cancellation](https://prodexlabs.slack.com/archives/D0C0HLKET9A/p1789086413588929)
-
 ## Native model capabilities checked
 
 These are Conductor 0.85's native capabilities. They do not add bracket commands
