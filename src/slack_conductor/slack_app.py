@@ -21,6 +21,34 @@ from .slack_io import SlackIO
 log = logging.getLogger(__name__)
 
 
+def rejection(body, team_id, addressed):
+    event = body.get("event", {})
+    return next(
+        (
+            name
+            for rejected, name in (
+                (body.get("team_id") != team_id, "wrong_team"),
+                (not event.get("user"), "missing_identity"),
+                (bool(event.get("bot_id")), "bot"),
+                (event.get("subtype") not in (None, "file_share"), "unsupported_subtype"),
+                (bool(event.get("hidden")), "hidden"),
+                (event.get("type") not in {"app_mention", "message"}, "unsupported_type"),
+                (not event.get("text"), "empty_text"),
+                (not event.get("channel") or not event.get("ts"), "missing_identity"),
+                (not addressed(event), "not_addressed"),
+            )
+            if rejected
+        ),
+        None,
+    )
+
+
+def addressed(event, bot_id):
+    return (
+        event.get("type") == "message" and event.get("channel_type") == "im"
+    ) or f"<@{bot_id}>" in event.get("text", "")
+
+
 class SocketModeHandler(BoltSocketModeHandler):
     def handle(self, client, req):
         # Record arrival before Bolt authorization/matching can discard an event.
@@ -30,43 +58,107 @@ class SocketModeHandler(BoltSocketModeHandler):
 
 
 class Bridge:
-    def __init__(self, config, store, conductor, slack, bot_id, owner_id, team_id):
+    def __init__(self, config, store, conductor, slack, bot_id, owner_id, team_id, *, routed=False):
         self.config, self.store, self.conductor, self.slack = config, store, conductor, slack
         self.bot_id, self.owner_id, self.team_id = bot_id, owner_id, team_id
+        self.routed = routed
         self.notifications = Notifications(store, slack, owner_id)
         self.poller = Poller(store, conductor.db, slack, notifications=self.notifications)
         if hasattr(conductor, "make_uploads"):
             self.poller.uploads = conductor.make_uploads(store, slack, self.poller.clock)
 
     def addressed(self, event):
-        return (
-            event.get("type") == "message" and event.get("channel_type") == "im"
-        ) or f"<@{self.bot_id}>" in event.get("text", "")
+        return addressed(event, self.bot_id)
+
+    def probe(self, capability):
+        if not hasattr(self.conductor, "probe"):
+            return {}
+        probe = self.conductor.probe()
+        if not probe.get("capabilities", {}).get(capability, False):
+            raise ValueError(f"This profile does not support {capability}.")
+        return probe
+
+    def check_options(self, options, creating):
+        probe = self.probe(options["send_mode"])
+        if not creating or not probe:
+            return
+        if not probe["capabilities"].get("create"):
+            raise ValueError("This profile does not support create.")
+        configuration = probe.get("configuration", {})
+        if "models" in configuration and options["model"] not in configuration["models"]:
+            raise ValueError("This profile does not support the selected model.")
+        if options["fast"] and not configuration.get("fast"):
+            raise ValueError("This profile does not support fast mode.")
+        if probe.get("adapter") == "headless" and (options["model"] or options["effort"]):
+            raise ValueError(
+                "Set this profile's headless model and effort in the client configuration."
+            )
+
+    def session_control(self, envelope, thread, command, text):
+        action, _, question_id = command.partition(":")
+        sid = thread["session_id"]
+        key = "slack-control:" + envelope["key"]
+        if action == "stop":
+            self.probe("interrupt")
+            self.conductor.rpc("runtime.interrupt", {"command_id": key, "session_id": sid}, key=key)
+            return "Stop requested."
+        probe = self.probe("respond")
+        if envelope.get("control"):
+            response = json.loads(envelope["control"])
+        else:
+            description = self.conductor.rpc("runtime.describe", {"session_id": sid})
+            questions = description.get("questions", [])
+            if action == "questions":
+                return (
+                    "\n".join(
+                        f"`{q['question_id']}` ({q['kind']}) — {q['prompt']}" for q in questions
+                    )
+                    or "There are no pending questions."
+                )
+            pending = next((q for q in questions if q["question_id"] == question_id), None)
+            if not pending or pending["kind"] not in probe.get("response_kinds", []):
+                raise ValueError(
+                    "Use [questions] to find a supported pending question or approval."
+                )
+            kind = pending["kind"]
+            if action == "answer" and kind == "question":
+                answers = [answer.strip() for answer in text.split("\n") if answer.strip()]
+                if not answers or len(answers) != len(pending.get("questions", [])):
+                    raise ValueError("Include one answer per line after [answer:question-id].")
+                response = {"kind": "question", "answers": answers}
+            elif action in {"approve", "deny"} and kind == "approval":
+                response = {
+                    "kind": "approval",
+                    "decision": "allow" if action == "approve" else "deny",
+                }
+            elif action in {"approve", "deny"} and kind == "plan":
+                response = {"kind": "plan", "approved": action == "approve"}
+            else:
+                raise ValueError("Respond to this request in Conductor.")
+            self.store.execute(
+                "UPDATE events SET control=? WHERE key=?", (json.dumps(response), envelope["key"])
+            )
+        self.conductor.rpc(
+            "runtime.respond",
+            {
+                "command_id": key,
+                "session_id": sid,
+                "question_id": question_id,
+                "response": response,
+            },
+            key=key,
+        )
+        return "Response submitted."
 
     def receive(self, body, *, source="socket"):
         event = body.get("event", {})
         if body.get("team_id") == self.team_id and event.get("user") == self.bot_id:
             self.notifications.acknowledge(event)
             return False
-        reason = next(
-            (
-                name
-                for rejected, name in (
-                    (body.get("team_id") != self.team_id, "wrong_team"),
-                    (event.get("user") != self.owner_id, "not_owner"),
-                    (bool(event.get("bot_id")), "bot"),
-                    (event.get("subtype") not in (None, "file_share"), "unsupported_subtype"),
-                    (bool(event.get("hidden")), "hidden"),
-                    (event.get("type") not in {"app_mention", "message"}, "unsupported_type"),
-                    (not event.get("text"), "empty_text"),
-                )
-                if rejected
-            ),
-            None,
-        )
+        reason = rejection(body, self.team_id, self.addressed)
+        if not reason and event.get("user") != self.owner_id:
+            reason = "not_owner"
         channel, ts = event.get("channel"), event.get("ts")
-        reason = reason or ("missing_identity" if not channel or not ts else None)
-        reason = reason or ("not_addressed" if not self.addressed(event) else None)
         if reason:
             audit(body, reason, source)
             return False
@@ -94,11 +186,12 @@ class Bridge:
         if completed:
             self.store.execute("UPDATE events SET state='done' WHERE key=?", (key,))
             return
-        channel, thread_ts = event["channel"], event.get("thread_ts", event["ts"])
+        channel, thread_ts = event["channel"], event.get("thread_ts") or event["ts"]
         self.store.execute("UPDATE events SET state='processing' WHERE key=?", (key,))
         status_id = None
+        private_error = self.routed and event.get("user") != self.owner_id
         try:
-            notice = self.notifications.reply_target(channel, thread_ts)
+            notice = self.notifications.reply_target(channel, thread_ts, actor=event.get("user"))
             if notice:
                 self.slack.post(
                     channel,
@@ -115,9 +208,31 @@ class Bridge:
             thread = self.store.thread(channel, thread_ts)
             previous = json.loads(thread["options"]) if thread else None
             text, options, command = parse(event["text"], self.bot_id, self.config, previous)
+            contributor = self.routed and event.get("user") != self.owner_id
+            baseline = parse("", self.bot_id, self.config, previous)[1]
+            if contributor and (not thread or command or options != baseline):
+                raise ValueError(
+                    "Only the thread owner can start a session or change session settings."
+                )
+            if (
+                self.routed
+                and thread
+                and command != "new"
+                and any(
+                    options.get(name) != previous.get(name, options.get(name))
+                    for name in ("model", "effort", "fast")
+                )
+            ):
+                raise ValueError("Use [new] to change the model, effort or fast mode.")
             if thread and thread["state"] == "archived" and command not in {"new", "close"}:
                 raise ValueError("workspace archived; use [new]")
-            if command == "close":
+            if command and command not in {"new", "close"}:
+                private_error = True
+                if not thread:
+                    raise ValueError("This thread has no workspace")
+                result = self.session_control(envelope, thread, command, text)
+                self.slack.post(self.owner_id, None, result, f"control:{key}", status_header=False)
+            elif command == "close":
                 if not thread:
                     raise ValueError("This thread has no workspace")
                 status_id = self.store.add_status(key, channel, thread_ts, "", options)
@@ -125,6 +240,8 @@ class Bridge:
                     channel, thread_ts, render("archiving"), f"status:{key}"
                 )
                 self.store.update(status_id, status_ts=status_ts)
+                if self.routed:
+                    self.probe("close_session")
                 self.conductor.archive(thread["workspace_id"], thread["session_id"])
                 self.store.thread_state(thread, "archived")
                 self.poller.finish(self.store.status(status_id), "", "archived")
@@ -134,7 +251,11 @@ class Bridge:
                 permalink = self.slack.call(
                     "chat_getPermalink", channel=channel, message_ts=event["ts"]
                 )["permalink"]
-                prompt = prompt_header(channel, thread_ts, event["ts"], permalink, text)
+                prompt = prompt_header(
+                    channel, thread_ts, event["ts"], permalink, text, sender=event.get("user")
+                )
+                if contributor:
+                    options = {**options, "send_mode": "queue"}
                 status_id = self.store.add_status(key, channel, thread_ts, prompt, options)
                 status_ts = self.store.status(status_id)["status_ts"] or self.slack.post(
                     channel,
@@ -149,6 +270,8 @@ class Bridge:
                 saved = self.store.status(status_id)
                 options = json.loads(saved["options"])
                 prompt = saved["prompt"]
+                if self.routed:
+                    self.check_options(options, not thread or command == "new")
                 if saved["workspace_id"]:
                     workspace = self.conductor.validate(saved["workspace_id"], saved["session_id"])
                 elif not thread or command == "new":
@@ -162,7 +285,7 @@ class Bridge:
                         thread["workspace_id"], thread["session_id"]
                     )
                 sid = workspace["active_session_id"]
-                self.store.bind(channel, thread_ts, workspace, options)
+                self.store.bind(channel, thread_ts, workspace, previous if contributor else options)
                 self.store.update(
                     status_id,
                     workspace_id=workspace["id"],
@@ -172,7 +295,10 @@ class Bridge:
                     else self.conductor.db.cursor(sid),
                     state="waiting",
                 )
-                note = self.conductor.send(workspace["id"], sid, prompt, options)
+                submit_options = options
+                if self.routed and self.config.runtime_adapter == "headless":
+                    submit_options = {key: options[key] for key in ("send_mode", "verbose")}
+                note = self.conductor.send(workspace["id"], sid, prompt, submit_options)
                 picked = self.conductor.db.pickup(sid, prompt)
                 self.store.update(
                     status_id, note=note, latest="starting agent" if picked else "queued"
@@ -208,6 +334,8 @@ class Bridge:
                 else:
                     self.store.update(status_id, state="failed")
             else:
+                if private_error:
+                    channel, thread_ts = event["user"], None
                 self.slack.post(channel, thread_ts, render("attention", message), f"error:{key}")
             self.store.execute("UPDATE events SET state='failed' WHERE key=?", (key,))
 
@@ -297,6 +425,37 @@ def identify(client, owner_id, stop):
         delay = min(delay * 2, 60)
 
 
+def work_bridge(bridge, connected, stop):
+    """A stalled client RPC must not hold another client's Slack work."""
+    reconciled = False
+    endpoint, store = bridge.conductor, bridge.store
+    while not stop.is_set() and getattr(endpoint, "enabled", lambda: True)():
+        started = time.monotonic()
+        if connected.is_set():
+            try:
+                if not reconciled:
+                    store.execute("UPDATE events SET state='pending' WHERE state='processing'")
+                    bridge.poller.reconcile()
+                    reconciled = True
+                available = endpoint.ready() or getattr(endpoint, "allow_offline", False)
+                if available and (envelope := store.next_event()):
+                    try:
+                        bridge.process(envelope)
+                    except Exception:
+                        store.execute(
+                            "UPDATE events SET state='pending',retry_at=? "
+                            "WHERE key=? AND state='processing'",
+                            (time.time() + 5, envelope["key"]),
+                        )
+                        raise
+                bridge.poller.tick()
+            except Unconfirmed:
+                log.info("Conductor reconnect pending")
+            except Exception:
+                log.exception("Slack client loop failed")
+        stop.wait(max(0.05, 1 - (time.monotonic() - started)))
+
+
 def run(config, store, conductor, creds, stop):
     # Bolt's own verification calls auth.test once inside the constructor.
     app = App(
@@ -312,6 +471,7 @@ def run(config, store, conductor, creds, stop):
         raise RuntimeError("Slack token belongs to a different workspace")
     if owner.get("is_bot") or owner.get("deleted"):
         raise RuntimeError("Configured Slack owner is not an active human user")
+    multi_profile = hasattr(conductor, "pairing")
     bridge = Bridge(
         config,
         store,
@@ -320,59 +480,88 @@ def run(config, store, conductor, creds, stop):
         auth["user_id"],
         creds["OWNER_SLACK_USER_ID"],
         creds["SLACK_TEAM_ID"],
+        routed=multi_profile,
     )
+    router = bridge
 
     @app.event("app_mention")
     @app.event("message")
     def receive(body):
-        bridge.receive(body)
+        router.receive(body)
 
     with ExitStack() as resources:
         conductor.start(store.session_bindings())
         resources.callback(conductor.close)
-        # Replaying an event reuses its status, workspace intent and native message ID.
-        store.execute("UPDATE events SET state='pending' WHERE state='processing'")
-        bridge.poller.reconcile()
         link = Link(app, creds["SLACK_APP_TOKEN"], stop)
         resources.callback(link.close)
-        recovery = IntakeRecovery(bridge, creds["SLACK_BOT_TOKEN"], stop, on_recovered=link.refresh)
-        recovery.start()
-        resources.callback(recovery.close)
+        connected = threading.Event()
+        workers = []
+        workers_lock = threading.Lock()
+
+        def add_worker(active):
+            recovery = IntakeRecovery(
+                active,
+                creds["SLACK_BOT_TOKEN"],
+                stop,
+                on_recovered=link.refresh,
+                receive=router.receive,
+            )
+            worker = threading.Thread(
+                target=work_bridge, args=(active, connected, stop), daemon=True
+            )
+            with workers_lock:
+                if stop.is_set():
+                    return
+                recovery.start()
+                try:
+                    worker.start()
+                except Exception:
+                    recovery.close()
+                    raise
+                workers.append((active, worker, recovery))
+
+        def stop_workers():
+            stop.set()
+            with workers_lock:
+                stopping = list(workers)
+            for _, _, recovery in stopping:
+                recovery.close()
+            for _, worker, _ in stopping:
+                worker.join(timeout=0.25)
+
+        resources.callback(stop_workers)
+        if multi_profile:
+            from .slack_routing import Routing
+
+            router = Routing(bridge, on_bridge=add_worker)
+            router.restore()
+        add_worker(bridge)
         announced = False
         while True:
-            started = time.monotonic()
-            connected = link.connected()
-            conductor.slack_ready = connected
+            online = link.connected()
+            if online:
+                connected.set()
+            else:
+                connected.clear()
+            conductor.slack_ready = online
+            with workers_lock:
+                runtime_ready = any(active.conductor.ready() for active, _, _ in workers)
             try:
                 write_service_status(
-                    config.state_dir, runtime_ready=conductor.ready(), slack_ready=connected
+                    config.state_dir, runtime_ready=runtime_ready, slack_ready=online
                 )
             except OSError:
                 log.warning("Cannot persist service health snapshot")
             if stop.is_set():
                 break
-            if connected and not announced:
+            if online and not announced:
                 announced = True
                 log.info(
                     "Conductor Slack bridge connected to %s; owner %s",
                     auth["team"],
                     creds["OWNER_SLACK_USER_ID"],
                 )
-            try:
-                online = conductor.ready()
-                # Replies cannot be delivered while Slack is away; keep events queued.
-                if connected:
-                    envelope = (
-                        store.next_event()
-                        if online or getattr(conductor, "allow_offline", False)
-                        else None
-                    )
-                    if envelope:
-                        bridge.process(envelope)
-                    bridge.poller.tick()
-            except Unconfirmed:
-                log.info("Conductor reconnect pending")
-            stop.wait(max(0.05, 1 - (time.monotonic() - started)))
+            stop.wait(1)
         link.close()
         if link.escalated:
             raise ConnectionError("Socket Mode stalled; launchd will restart the daemon")

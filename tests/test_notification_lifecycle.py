@@ -1,4 +1,5 @@
 import json
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -155,6 +156,16 @@ def test_startup_delivers_pending_dm_without_dispatching_agent_work(bridge_state
     sid = status(store, "request", "task")
     store.update(sid, state="complete")
     notices.observe(store.status(sid), "done")
+    stop = threading.Event()
+    call = slack.call
+
+    def stop_after_notification(method, **kwargs):
+        response = call(method, **kwargs)
+        if method == "chat_postMessage":
+            stop.set()
+        return response
+
+    slack.call = stop_after_notification
     client = SimpleNamespace(
         auth_test=lambda: {"team_id": "T1", "user_id": "B", "team": "test"},
         users_info=lambda **_: {"user": {}},
@@ -164,32 +175,29 @@ def test_startup_delivers_pending_dm_without_dispatching_agent_work(bridge_state
     monkeypatch.setattr(slack_app, "SlackIO", lambda _: slack)
     monkeypatch.setattr(
         slack_app,
-        "SocketModeHandler",
+        "Link",
         lambda *_: SimpleNamespace(
-            client=None,
-            connect=lambda: None,
             close=lambda: None,
+            connected=lambda: True,
+            refresh=lambda: None,
+            escalated=False,
         ),
     )
-    monkeypatch.setattr(
-        slack_app,
-        "ConnectionHealth",
-        lambda *_: SimpleNamespace(
-            start=lambda: None,
-            close=lambda: None,
-            failed=False,
-        ),
-    )
-    slack_app.run(
-        Config(state_dir=store.path.parent),
-        store,
-        SimpleNamespace(db=db, start=lambda _: None, ready=lambda: True, close=lambda: None),
-        {
-            "SLACK_BOT_TOKEN": "test",
-            "SLACK_APP_TOKEN": "test",
-            "SLACK_TEAM_ID": "T1",
-            "OWNER_SLACK_USER_ID": "U1",
-        },
-        SimpleNamespace(is_set=lambda: True),
-    )
+    deadline = threading.Timer(5, stop.set)
+    deadline.start()
+    try:
+        slack_app.run(
+            Config(state_dir=store.path.parent),
+            store,
+            SimpleNamespace(db=db, start=lambda _: None, ready=lambda: True, close=lambda: None),
+            {
+                "SLACK_BOT_TOKEN": "test",
+                "SLACK_APP_TOKEN": "test",
+                "SLACK_TEAM_ID": "T1",
+                "OWNER_SLACK_USER_ID": "U1",
+            },
+            stop,
+        )
+    finally:
+        deadline.cancel()
     assert len(sent) == 1
