@@ -43,6 +43,18 @@ def test_headless_config_defaults_to_steering(tmp_path):
     assert Config.load(tmp_path).send_mode == "steer"
 
 
+def test_workspace_pairing_requires_explicit_boolean_opt_in(tmp_path):
+    path = tmp_path / "config.toml"
+    state = f"state_dir = {json.dumps(str(tmp_path / 'state'))}\n"
+    path.write_text(state)
+    assert not Config.load(tmp_path).pairing_allow_workspace_members
+    path.write_text(state + "pairing_allow_workspace_members = true\n")
+    assert Config.load(tmp_path).pairing_allow_workspace_members
+    path.write_text(state + 'pairing_allow_workspace_members = "true"\n')
+    with pytest.raises(TypeError, match="pairing_allow_workspace_members"):
+        Config.load(tmp_path)
+
+
 @pytest.mark.parametrize("key", list(TOKENS))
 def test_invalid_credentials_identify_field_without_disclosing_value(tmp_path, monkeypatch, key):
     for name, value in TOKENS.items():

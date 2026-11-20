@@ -3,6 +3,8 @@
 import re
 import threading
 
+from slack_sdk.errors import SlackClientError
+
 from .intake import audit
 from .pairing import PAIR_CODE, PROFILE_NAME
 from .protocol import parse, profile_selector
@@ -130,8 +132,9 @@ class Routing:
 
     def dm_command(self, command, argument, user, key):
         if command == "connect":
-            allowed = self.legacy.config.pairing_allowed_users
-            if user != self.owner_id and user not in allowed:
+            if not PAIR_CODE.fullmatch(argument):
+                raise ValueError("Invalid or expired pairing code")
+            if not self.pairing_allowed(user):
                 return "Ask the Flotilla server operator to enable pairing for your Slack account."
             profile = self.pairing.claim(
                 argument,
@@ -170,6 +173,36 @@ class Routing:
         if self.pairing.revoke(self.team_id, user, argument):
             return f"Disconnected `{argument}`."
         return "No connected profile with that name."
+
+    def pairing_allowed(self, user):
+        config = self.legacy.config
+        if user == self.owner_id or user in config.pairing_allowed_users:
+            return True
+        if not config.pairing_allow_workspace_members or user == "USLACKBOT":
+            return False
+        try:
+            response = self.slack.call("users_info", user=user)
+        except (OSError, SlackClientError):
+            raise ValueError("Slack membership could not be verified. Try pairing again.") from None
+        member = response.get("user")
+        if response.get("ok") is not True or not isinstance(member, dict):
+            return False
+        enterprise = member.get("enterprise_user", {})
+        if not isinstance(enterprise, dict):
+            return False
+        teams = enterprise.get("teams", member.get("teams", [member.get("team_id")]))
+        return (
+            user in (member.get("id"), enterprise.get("id"))
+            and isinstance(teams, list)
+            and self.team_id in teams
+            and member.get("deleted") is False
+            and member.get("is_bot") is False
+            and not member.get("is_stranger")
+            and not member.get("is_app_user")
+            and not member.get("is_workflow_bot")
+            and not member.get("is_agentforce_bot")
+            and not member.get("suspended")
+        )
 
     def receive(self, body, *, source="socket"):
         event = body.get("event", {})

@@ -1,6 +1,8 @@
 # Connect a client to Flotilla
 
-Ask the Slack app operator for the server’s WebSocket URL and the release revision. The operator enables your Slack member ID in the server’s `pairing_allowed_users` list. Each client gets its own credential. Agent credentials and repository access stay on the machine you pair.
+Ask the Slack app operator for the server’s WebSocket URL and the release revision. The operator can enable your Slack member ID in the server’s `pairing_allowed_users` list or enable pairing for members of this Slack workspace. Each client gets its own credential. Agent credentials and repository access stay on the machine you pair.
+
+To allow current and future active human members of the server’s Slack workspace to pair, set `pairing_allow_workspace_members = true` in the server config. The app uses its `users:read` scope to verify membership when someone DMs a pairing code. External Slack Connect users, deactivated accounts, and bots cannot pair through this setting. The owner and explicitly allowed member IDs keep their existing access.
 
 ## Pair a Mac
 
