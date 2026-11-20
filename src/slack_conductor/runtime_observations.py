@@ -41,14 +41,20 @@ class RuntimeObservations:
     def replay_pending(self, sid):
         return self.pending_pages.get(sid, False)
 
+    def receipt(self, sid, prompt):
+        return self._observe(sid, prompt=prompt, view="receipt")["receipt"]
+
     def pickup(self, sid, prompt):
-        receipt = self._observe(sid, prompt=prompt, view="receipt")["receipt"]
+        receipt = self.receipt(sid, prompt)
         if receipt["state"] == "picked_up":
             return {"seq": receipt["seq"], "turn_id": receipt["segment_id"]}
         return None
 
     def pending(self, sid, prompt):
-        return self._observe(sid, prompt=prompt, view="receipt")["receipt"]["state"] == "queued"
+        return self.receipt(sid, prompt)["state"] in {
+            "queued",
+            "pending",
+        }
 
     def has_later_turn(self, sid, after, turn_id):
         return self._observe(sid, after=after, segment_id=turn_id, view="later_input")[

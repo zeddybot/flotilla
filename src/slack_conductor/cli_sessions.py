@@ -47,8 +47,7 @@ def show_session(config, session_id):
 
 
 def _options(config, send_mode=None):
-    default = "queue" if config.runtime_adapter == "headless" else config.send_mode
-    return {"send_mode": send_mode or default}
+    return {"send_mode": send_mode or config.send_mode}
 
 
 def new_session(
@@ -70,11 +69,12 @@ def new_session(
         "fast": False,
     }
     if config.runtime_adapter == "headless":
+        use_defaults = engine is None or engine == config.engine
         spec = {
             "repo": str(selected_repo),
             "engine": engine or config.engine,
-            "model": model or config.engine_model,
-            "effort": config.engine_effort,
+            "model": model or (config.engine_model if use_defaults else None),
+            "effort": config.engine_effort if use_defaults else None,
             "permission_policy": config.engine_permission_policy,
         }
     created = runtime.create(

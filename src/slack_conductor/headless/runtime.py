@@ -11,11 +11,14 @@ from pathlib import Path
 from ..remote_files import AssetSource
 from ..runtime import RUNTIME_VERSION, Unsupported
 from ..runtime_log import EventLog
+from .engines import CLAUDE_EFFORTS
 from .execution import Execution
 from .observations import observe as observe_view
 from .permissions import within_policy
-from .process_host import terminate
+from .process_host import Rejected, terminate
 from .store import Store
+
+STEERING_UNCERTAIN = "The engine did not confirm steering. Check the active turn before resending."
 
 
 def serialized(method):
@@ -40,6 +43,8 @@ class HeadlessRuntime(Execution):
         self._thread = None
         self._workers = {}
         self._processes = {}
+        self._active_turns = {}
+        self._pending_steers = {}
         self._lock = threading.RLock()
 
     def start(self, bindings):
@@ -49,6 +54,18 @@ class HeadlessRuntime(Execution):
                 return
             # A prior process might have accepted a prompt. Never replay it blindly.
             with self.store.connect() as db:
+                interrupted_steers = db.execute(
+                    "SELECT commands.id, commands.result FROM commands JOIN turns "
+                    "ON turns.command_id=commands.id WHERE turns.state='steering'"
+                ).fetchall()
+                for command in interrupted_steers:
+                    value = json.loads(command["result"])
+                    value.update(state="uncertain", warning=STEERING_UNCERTAIN)
+                    db.execute(
+                        "UPDATE commands SET result=? WHERE id=?",
+                        (json.dumps(value), command["id"]),
+                    )
+                db.execute("UPDATE turns SET state='uncertain' WHERE state='steering'")
                 db.execute(
                     "UPDATE turns SET state='attention' WHERE state IN ('launching','running')"
                 )
@@ -103,7 +120,7 @@ class HeadlessRuntime(Execution):
                 "create": True,
                 "recover": True,
                 "queue": True,
-                "steer": False,
+                "steer": True,
                 "events": True,
                 "files": True,
                 "close_session": True,
@@ -114,6 +131,13 @@ class HeadlessRuntime(Execution):
             "configuration_policy": "session_start_fixed",
             "configuration": {
                 "engines": ["claude", "codex"],
+                "default_engine": self.config.engine,
+                "default_send_mode": getattr(self.config, "send_mode", "queue"),
+                "engine_capabilities": {
+                    "claude": {"queue": True, "steer": True},
+                    "codex": {"queue": True, "steer": True},
+                },
+                "engine_efforts": {"claude": list(CLAUDE_EFFORTS)},
                 "permission_policy": ["read-only", "workspace-write", "external-sandbox"],
             },
         }
@@ -136,6 +160,7 @@ class HeadlessRuntime(Execution):
             "workspace_id": row["workspace_id"],
             "adapter": "headless",
             "engine": row["engine"],
+            "capabilities": {"queue": True, "steer": True},
             "native_id": row["native_id"],
             "state": row["state"],
             "activity": row["activity"],
@@ -160,12 +185,18 @@ class HeadlessRuntime(Execution):
         within_policy(policy, self.config.engine_permission_policy)
         if spec.get("fast"):
             raise Unsupported("Headless fast mode is unsupported")
+        default_model = default_effort = None
+        if engine == self.config.engine:
+            default_model = getattr(self.config, "engine_model", None) or None
+            default_effort = getattr(self.config, "engine_effort", None) or None
         effective = {
             "engine": engine,
-            "model": spec.get("model") or getattr(self.config, "engine_model", None),
-            "effort": spec.get("effort") or getattr(self.config, "engine_effort", None),
+            "model": spec.get("model") or default_model,
+            "effort": spec.get("effort") or default_effort,
             "permission_policy": policy,
         }
+        if engine == "claude" and effective["effort"] not in (None, *CLAUDE_EFFORTS):
+            raise Unsupported("Claude effort must be low, medium, high, xhigh or max")
         sid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"headless:{command_id}"))
         workspace_id = sid
         native_id = str(uuid.uuid4()) if engine == "claude" else None
@@ -199,11 +230,16 @@ class HeadlessRuntime(Execution):
         row = self._session(session_id)
         if row["state"] != "active":
             raise ValueError("Session is archived")
-        if options.get("send_mode", "queue") != "queue":
-            raise Unsupported("Headless steering is unsupported; use queue")
+        mode = options.get("send_mode")
+        if mode is None:
+            mode = "queue"
+        if mode not in {"queue", "steer"}:
+            raise Unsupported(f"Unsupported delivery mode: {mode}")
         fixed = json.loads(row["spec"])
         for key in ("model", "effort", "permission_policy"):
-            if key in options and options[key] != fixed[key]:
+            if key not in options or (key != "permission_policy" and options[key] in (None, "")):
+                continue
+            if options[key] != fixed[key]:
                 raise Unsupported(f"Headless {key} is fixed at session creation")
         arguments = {
             "session_id": session_id,
@@ -214,7 +250,20 @@ class HeadlessRuntime(Execution):
         }
         prior = self.store.command(command_id, "submit", arguments)
         if prior is not None:
+            if prior["state"] == "rejected":
+                raise Unsupported(prior["warning"])
             return prior
+        if mode == "steer":
+            if row["activity"] == "working" and session_id in self._active_turns:
+                return self._steer(command_id, arguments)
+            if row["activity"] != "idle":
+                raise Unsupported("The headless turn is not ready for steering")
+            with self.store.connect() as db:
+                queued = db.execute(
+                    "SELECT 1 FROM turns WHERE session_id=? AND state='queued'", (session_id,)
+                ).fetchone()
+            if queued:
+                raise Unsupported("The queued turn has not started; try steering once it starts")
         value = {
             "command_id": command_id,
             "message_id": message_id,
@@ -233,7 +282,8 @@ class HeadlessRuntime(Execution):
             old = db.execute("SELECT * FROM turns WHERE message_id=?", (message_id,)).fetchone()
             if old:
                 if (
-                    old["session_id"] != session_id
+                    old["segment_id"] is not None
+                    or old["session_id"] != session_id
                     or old["run_id"] != run_id
                     or old["prompt"] != prompt
                 ):
@@ -247,6 +297,84 @@ class HeadlessRuntime(Execution):
             self.store.record(db, command_id, "submit", arguments, value)
         self._wake.set()
         return value
+
+    def _steer(self, command_id, arguments):
+        sid = arguments["session_id"]
+        channel, thread_id, native_turn, owner = self._active_turns[sid]
+        message_id = arguments["message_id"]
+        prompt = arguments["prompt"]
+        turn = {
+            "id": owner["id"],
+            "session_id": sid,
+            "message_id": message_id,
+            "run_id": owner["run_id"],
+        }
+        value = {
+            "command_id": command_id,
+            "message_id": message_id,
+            "run_id": owner["run_id"],
+            "segment_id": owner["id"],
+            "state": "pending",
+            "warning": None,
+        }
+        with self.store.connect() as db:
+            if db.execute("SELECT 1 FROM turns WHERE message_id=?", (message_id,)).fetchone():
+                raise ValueError("Message identity was already used")
+            db.execute(
+                "INSERT INTO turns(id,session_id,command_id,message_id,run_id,prompt,state,segment_id) "
+                "VALUES (?,?,?,?,?,?,'steering',?)",
+                (
+                    str(uuid.uuid4()),
+                    sid,
+                    command_id,
+                    message_id,
+                    owner["run_id"],
+                    prompt,
+                    owner["id"],
+                ),
+            )
+            # Commit a receipt before writing to stdin. A lost native reply
+            # cannot tell us whether the active turn accepted the input.
+            self.store.record(db, command_id, "submit", arguments, value)
+        try:
+            if native_turn is None:
+                response = channel.steer_async(thread_id, native_turn, prompt, message_id)
+                self._pending_steers.setdefault(sid, []).append((response, turn, prompt, value))
+                return value.copy()
+            channel.steer(thread_id, native_turn, prompt, message_id)
+        except Rejected:
+            self._settle_steer(turn, prompt, value, "rejected")
+            raise Unsupported(value["warning"]) from None
+        except (OSError, RuntimeError):
+            self._settle_steer(turn, prompt, value, "uncertain")
+        else:
+            self._settle_steer(turn, prompt, value, "steered")
+        return value
+
+    def _reconcile_steers(self, sid):
+        for item in self._pending_steers.pop(sid, []):
+            receipt, turn, prompt, value = item
+            if not receipt.done():
+                self._pending_steers.setdefault(sid, []).append(item)
+                continue
+            state = "uncertain" if receipt.exception() else "steered"
+            self._settle_steer(turn, prompt, value, state)
+
+    def _settle_steer(self, turn, prompt, value, state):
+        if state == "rejected":
+            value.update(state=state, warning="The active turn no longer accepts steering")
+        elif state == "uncertain":
+            value.update(state=state, warning=STEERING_UNCERTAIN)
+        else:
+            event = self._event(turn, "user", {"kind": "input", "text": prompt})
+            value.update(state="picked_up", warning=None, pickup_seq=event["seq"])
+        command_id = value["command_id"]
+        with self.store.connect() as db:
+            db.execute(
+                "UPDATE turns SET state=?,pickup_seq=? WHERE command_id=?",
+                (state, value.get("pickup_seq"), command_id),
+            )
+            db.execute("UPDATE commands SET result=? WHERE id=?", (json.dumps(value), command_id))
 
     def observe(self, session_id, after=0, prompt=None, segment_id=None, view="all", limit=200):
         return observe_view(self, session_id, after, prompt, segment_id, view, limit)

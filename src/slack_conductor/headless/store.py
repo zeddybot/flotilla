@@ -28,6 +28,7 @@ class Store:
                     message_id TEXT NOT NULL UNIQUE, run_id TEXT NOT NULL,
                     prompt TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'queued',
                     pickup_seq INTEGER, result_seq INTEGER,
+                    segment_id TEXT REFERENCES turns(id),
                     FOREIGN KEY(session_id) REFERENCES sessions(id)
                 );
                 CREATE TABLE IF NOT EXISTS jobs (
@@ -35,6 +36,8 @@ class Store:
                     PRIMARY KEY(session_id,id)
                 );
             """)
+            if "segment_id" not in {row["name"] for row in db.execute("PRAGMA table_info(turns)")}:
+                db.execute("ALTER TABLE turns ADD COLUMN segment_id TEXT REFERENCES turns(id)")
         self.path.chmod(0o600)
 
     @contextmanager

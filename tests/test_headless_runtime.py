@@ -24,17 +24,77 @@ if 'slow' in args:
     time.sleep(10)
 if engine == 'claude':
     identity = args[args.index('--session-id')+1] if '--session-id' in args else args[args.index('--resume')+1]
+    first_input = json.loads(sys.stdin.readline())
+    prompt = first_input['message']['content']
+
+    def replay(message):
+        print(json.dumps({**message, 'isReplay': True, 'session_id': identity}), flush=True)
+
     print(json.dumps({'type':'system','subtype':'init','session_id':identity}), flush=True)
-    print(json.dumps({'type':'assistant','session_id':identity,'message':{'content':[{'type':'text','text':'claude answer'}]}}), flush=True)
-    if 'no-result' not in args:
-        print(json.dumps({'type':'result','session_id':identity,'result':'claude answer'}), flush=True)
+    replay(first_input)
+    if prompt == 'slow':
+        time.sleep(10)
+    output = 'claude answer'
+    if prompt in {'steer-me', 'finish-before-replay'}:
+        correction = json.loads(sys.stdin.readline())
+        release = Path(os.environ['HEADLESS_CALLS'] + '.release')
+        while not release.exists():
+            time.sleep(0.02)
+    if prompt == 'steer-me':
+        if isinstance(correction['message']['content'], list):
+            output = correction['message']['content'][0]['text']
+        else:
+            output = correction['message']['content']
+        replay(correction)
+    print(json.dumps({'type':'assistant','session_id':identity,'message':{'content':[{'type':'text','text':output}]}}), flush=True)
+    if prompt != 'no-result':
+        print(json.dumps({'type':'result','session_id':identity,'result':output}), flush=True)
 else:
     identity = '22222222-2222-4222-8222-222222222222'
-    print(json.dumps({'type':'thread.started','thread_id':identity}), flush=True)
-    print(json.dumps({'type':'turn.started'}), flush=True)
-    print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':'codex answer'}}), flush=True)
-    if 'no-result' not in args:
-        print(json.dumps({'type':'turn.completed'}), flush=True)
+    turn = {'id': 'native-turn', 'status': 'inProgress'}
+
+    def send(**data):
+        print(json.dumps(data), flush=True)
+
+    def done(text='codex answer'):
+        send(method='item/completed', params={'threadId': identity, 'turnId': turn['id'],
+            'item': {'type': 'agentMessage', 'text': text}})
+        send(method='turn/completed', params={'threadId': identity,
+            'turn': {**turn, 'status': 'completed'}})
+
+    for line in sys.stdin:
+        request = json.loads(line)
+        method = request['method']
+        if method == 'initialized':
+            continue
+        req_id = request['id']
+        params = request['params']
+        if method == 'initialize':
+            send(id=req_id, result={})
+        elif method == 'model/list':
+            send(id=req_id, result={'data': [{'model': 'discovered-codex', 'isDefault': True}]})
+        elif method in {'thread/start', 'thread/resume'}:
+            assert params['approvalPolicy'] == 'never' and params['sandbox'] == 'read-only'
+            with open(os.environ['HEADLESS_CALLS'] + '.threads', 'a') as threads:
+                threads.write(json.dumps([method, params]) + '\\n')
+            send(id=req_id, result={'thread': {'id': identity}, 'model': params['model']})
+        elif method == 'turn/start':
+            assert params['threadId'] == identity
+            send(id=req_id, result={'turn': turn})
+            prompt = params['input'][0]['text']
+            if prompt not in {'steer-me', 'reject-steer', 'disconnect-steer'}:
+                done()
+        elif method == 'turn/steer':
+            assert params['threadId'] == identity and params['expectedTurnId'] == turn['id']
+            if prompt == 'disconnect-steer':
+                sys.exit(0)
+            if prompt == 'reject-steer':
+                send(id=req_id, error={'code': -32600, 'message': 'no active turn'})
+                done()
+            else:
+                send(id=req_id, result={'turnId': turn['id']})
+                done(params['input'][0]['text'])
+
 """
 
 
@@ -107,15 +167,21 @@ def test_create_queue_resume_and_archive(tmp_path, monkeypatch, engine):
     _wait(lambda: runtime.observe(sid, view="snapshot")["rest"]["confirmed"])
     rows = [json.loads(line) for line in calls.read_text().splitlines()]
     assert all(row["cwd"] == runtime.describe(sid)["path"] for row in rows)
-    assert all("chosen" in row["args"] and "high" in " ".join(row["args"]) for row in rows)
+    if engine == "claude":
+        assert all("chosen" in row["args"] and "high" in " ".join(row["args"]) for row in rows)
     assert "--dangerously-skip-permissions" not in rows[0]["args"]
     assert "--dangerously-bypass-approvals-and-sandbox" not in rows[0]["args"]
     if engine == "claude":
         assert "--session-id" in rows[0]["args"]
         assert "--resume" in rows[1]["args"]
     else:
-        assert "resume" not in rows[0]["args"]
-        assert "resume" in rows[1]["args"]
+        requests = [
+            json.loads(line) for line in Path(str(calls) + ".threads").read_text().splitlines()
+        ]
+        assert [method for method, _ in requests] == ["thread/start", "thread/resume"]
+        for _, params in requests:
+            assert params["model"] == "chosen"
+            assert params["config"] == {"model_reasoning_effort": "high"}
         assert runtime.describe(sid)["native_id"] == "22222222-2222-4222-8222-222222222222"
     observed = runtime.observe(sid, view="events", limit=2)
     assert len(observed["events"]) == 2 and observed["has_more"]
@@ -202,3 +268,100 @@ def test_terminate_kills_child_after_leader_exits(tmp_path):
     process.stdout.close()
     time.sleep(0.7)
     assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    ("engine", "case"),
+    [
+        ("codex", "steer-me"),
+        ("codex", "reject-steer"),
+        ("codex", "disconnect-steer"),
+        ("claude", "steer-me"),
+        ("claude", "finish-before-replay"),
+    ],
+)
+def test_native_steering(tmp_path, monkeypatch, engine, case):
+    config, calls = _fixture(tmp_path, engine)
+    monkeypatch.setenv("HEADLESS_CALLS", str(calls))
+    runtime = HeadlessRuntime(config)
+    sid = runtime.create("create", {})["session_id"]
+    assert runtime.describe(sid)["capabilities"]["steer"]
+    # Steering an idle session begins its first turn.
+    assert (
+        runtime.submit("start", sid, "m1", "run-original", case, {"send_mode": "steer"})["state"]
+        == "queued"
+    )
+    runtime.start({sid: sid})
+    try:
+        _wait(lambda: sid in runtime._active_turns)
+
+        def steer():
+            return runtime.submit(
+                "steer", sid, "m2", "run-unused", "redirect", {"send_mode": "steer"}
+            )
+
+        if engine == "claude":
+            submitted = steer()
+            assert submitted["state"] == "pending" and steer() == submitted
+            assert (
+                runtime.observe(sid, prompt="redirect", view="receipt")["receipt"]["state"]
+                == "pending"
+            )
+            assert runtime.describe(sid)["activity"] == "working"
+            Path(str(calls) + ".release").touch()
+            _wait(lambda: runtime.describe(sid)["activity"] != "working")
+        if case == "reject-steer":
+            for _ in range(2):
+                with pytest.raises(Unsupported, match="no longer accepts steering"):
+                    steer()
+            expected = "rejected"
+        elif case in {"disconnect-steer", "finish-before-replay"}:
+            result = steer()
+            assert result["state"] == "uncertain" and result["warning"]
+            assert steer() == result
+            expected = "uncertain"
+        else:
+            result = steer()
+            assert result["state"] == "picked_up" and result["run_id"] == "run-original"
+            assert steer() == result
+            original = runtime.observe(sid, prompt=case, view="receipt")["receipt"]
+            assert original["segment_id"] == result["segment_id"]
+            assert not runtime.observe(
+                sid, view="later_input", after=original["seq"], segment_id=original["segment_id"]
+            )["later_input"]
+            expected = "picked_up"
+        _wait(lambda: runtime.describe(sid)["activity"] != "working")
+        assert (
+            runtime.observe(sid, prompt="redirect", view="receipt")["receipt"]["state"] == expected
+        )
+        events = runtime.observe(sid, view="events")["events"]
+        if case == "steer-me":
+            assert all(event["turn_id"] == result["segment_id"] for event in events)
+            assert events[-1]["event"]["kind"] == "result"
+            assert events[-1]["event"]["text"] == "redirect"
+        if case == "finish-before-replay":
+            assert events[-1]["event"]["text"] == "claude answer"
+            assert runtime.describe(sid)["activity"] == "idle"
+        assert len(calls.read_text().splitlines()) == 1
+    finally:
+        runtime.shutdown()
+
+
+def test_codex_native_default_is_independent_of_configured_claude_model(tmp_path, monkeypatch):
+    config, calls = _fixture(tmp_path, "claude")
+    monkeypatch.setenv("HEADLESS_CALLS", str(calls))
+    runtime = HeadlessRuntime(config)
+    sid = runtime.create("create", {"engine": "codex"})["session_id"]
+    assert runtime.describe(sid)["configuration"]["requested"]["model"] is None
+    runtime.submit("one", sid, "m1", "r1", "task one", {})
+    runtime.submit("two", sid, "m2", "r2", "task two", {})
+    runtime.start({sid: sid})
+    try:
+        _wait(lambda: runtime.observe(sid, prompt="task two", view="receipt")["receipt"]["seq"])
+        _wait(lambda: runtime.describe(sid)["activity"] == "idle")
+        observed = runtime.describe(sid)["configuration"]
+        assert observed["effective"]["model"] == "discovered-codex"
+        threads = Path(str(calls) + ".threads").read_text().splitlines()
+        assert [json.loads(line)[1]["model"] for line in threads] == ["discovered-codex"] * 2
+    finally:
+        runtime.shutdown()

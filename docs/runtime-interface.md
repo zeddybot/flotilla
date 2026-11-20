@@ -64,9 +64,9 @@ before pickup acknowledgment. Resumption never uses a directory-global `--last`.
 
 The headless service owns process creation and serializes work per session. CLI
 commands use a private local socket rather than creating another process owner.
-Each session gets an isolated Git worktree. Queueing and retries are durable;
-steering, interactive reveal, and headless approval replies remain explicitly
-unsupported. Process exit alone does not establish a successful answer: a
+Each session gets an isolated Git worktree. The worker stores queued inputs durably. Active turns accept steering through
+Claude’s bidirectional stream or the Codex app-server. Interactive reveal and
+approval replies require Conductor. Process exit alone does not establish a successful answer: a
 completion event and reconciliation of owned work are required.
 
 Conductor cancellation targets the current native turn and pauses the queue.

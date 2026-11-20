@@ -262,3 +262,28 @@ def test_remote_poller_preserves_content_offline_and_steer_handoff(remote_observ
         assert len(sent) == 1 and f"status-{second}" in sent[0]["text"]
     finally:
         successor.close()
+
+
+def test_remote_poller_keeps_original_result_when_native_steer_is_unconfirmed(
+    remote_observations, monkeypatch
+):
+    store, conn, db, slack, remote, _native = remote_observations
+    original = status(store, "original", "work")
+    message(conn, "user", "work", "turn")
+    poller = Poller(store, remote.db, slack, settle_seconds=0)
+    poller.tick()
+    assert store.status(original)["state"] == "active"
+
+    correction = status(store, "correction", "redirect", cursor=db.cursor("s"))
+    receipt = {"state": "pending", "seq": None, "segment_id": None}
+    monkeypatch.setattr(remote.db, "receipt", lambda sid, prompt: receipt)
+    poller.tick()
+    assert store.status(correction)["state"] == "waiting"
+    assert any("waiting for engine pickup" in text for _, text in slack.edits)
+
+    receipt["state"] = "uncertain"
+    result(conn, "Original result.", "turn")
+    poller.tick()
+    assert store.status(correction)["state"] == "complete"
+    assert "did not confirm steering" in store.status(correction)["result"]
+    assert store.status(original)["result"] == "Original result."
