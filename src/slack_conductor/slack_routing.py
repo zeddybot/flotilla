@@ -161,23 +161,22 @@ class Routing:
             audit(body, "profile_command", source)
             return False
 
-        profiles = self.pairing.profiles(self.team_id, user)
-        if not profiles and user != self.owner_id:
-            if source != "history":
-                self.private(user, CONNECT_GUIDE, key)
-            audit(body, "unregistered", source)
-            return False
-
         try:
             if direct and thread_ts != ts:
-                for client_id in [profile.id for profile in profiles] + (
-                    [self.legacy_id] if user == self.owner_id else []
-                ):
-                    bridge = self.to_bridge(client_id)
+                with self.lock:
+                    bridges = list(self.bridges.values())
+                for bridge in bridges:
                     if bridge.notifications.reply_target(channel, thread_ts, actor=user):
                         accepted = bridge.store.accept(key, event)
                         audit(body, "accepted" if accepted else "duplicate", source)
                         return accepted
+
+            if not self.pairing.profiles(self.team_id, user) and user != self.owner_id:
+                if source != "history":
+                    self.private(user, CONNECT_GUIDE, key)
+                audit(body, "unregistered", source)
+                return False
+
             name, event_text = profile_selector(event["text"], self.bot_id)
             if not addressed({**event, "text": event_text}, self.bot_id):
                 raise ValueError("Place [profile:name] immediately after the mention.")

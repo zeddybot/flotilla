@@ -107,6 +107,8 @@ class Bridge:
             response = json.loads(envelope["control"])
         else:
             description = self.conductor.rpc("runtime.describe", {"session_id": sid})
+            if description.get("questions_available") is False:
+                raise ValueError("Questions are currently unavailable. Check Conductor.")
             questions = description.get("questions", [])
             if action == "questions":
                 return (
@@ -133,6 +135,8 @@ class Bridge:
                 }
             elif action in {"approve", "deny"} and kind == "plan":
                 response = {"kind": "plan", "approved": action == "approve"}
+            elif action == "deny" and kind in {"codex_permission", "mcp_elicitation"}:
+                response = {"kind": kind, "action": "decline"}
             else:
                 raise ValueError("Respond to this request in Conductor.")
             self.store.execute(

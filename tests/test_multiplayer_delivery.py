@@ -203,7 +203,7 @@ def test_two_enrolled_users_keep_thread_routing_and_retries_isolated(tmp_path, c
             return {"permalink": f"https://slack.test/{kwargs['message_ts']}"}
         if method == "chat_postMessage":
             notices.append(kwargs)
-            return {"channel": kwargs["channel"], "ts": str(len(notices))}
+            return {"channel": f"D{kwargs['channel']}", "ts": str(len(notices))}
         raise AssertionError(method)
 
     slack.call = slack_call
@@ -268,4 +268,10 @@ def test_two_enrolled_users_keep_thread_routing_and_retries_isolated(tmp_path, c
         assert any("already linked" in post[2] for post in slack.posts)
         assert sum("headless answer" in text for _, text in slack.edits) == 1
         assert sum("conductor answer" in text for _, text in slack.edits) == 2
-        assert [notice["channel"] for notice in notices] == ["U2", "U1", "U1"]
+        assert [notice["channel"] for notice in notices] == ["U2", "U1", "U2"]
+        assert mac_bridge.notifications.reply_target("DU2", "3", actor="U1") is None
+        dispatch("U2", "101", "how do I follow up?", dm=True, thread="3")
+        process(mac_bridge)
+        assert "original thread" in slack.posts[-1][2]
+        assert store.route("T1", "DU2", "3") is None
+        assert len(native.sends) == 2 and len(calls.read_text().splitlines()) == 1
