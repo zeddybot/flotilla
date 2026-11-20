@@ -336,7 +336,7 @@ def test_pending_plan_remains_attention_when_reload_resets_native_status(bridge_
     now[0] += 90
     poller.tick()
     assert store.status(sid)["state"] == "active"
-    assert Turn.load(store.status(sid)["tracking"]).detail == "plan approval requested in Conductor"
+    assert Turn.load(store.status(sid)["tracking"]).detail == "plan approval requested"
     result(conn, "plan-approved", "plan-turn")
     poller.tick()
     now[0] += 3

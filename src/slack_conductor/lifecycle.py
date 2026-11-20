@@ -9,6 +9,8 @@ class Turn:
     tasks: dict = field(default_factory=dict)
     ended: list = field(default_factory=list)
     content: str = ""
+    stream_message: str | None = None
+    stream_block: int | None = None
     phase: str = "starting"
     detail: str = ""
     result_seq: int = 0
@@ -95,6 +97,18 @@ class Turn:
             self.ended.append(task)
             self.awaiting_callback = True
             self.phase, self.detail = "working", "checking background job results"
+        elif kind == "text_start":
+            self.stream_message = event.get("message_id")
+            self.stream_block = None
+            return False
+        elif kind == "text_delta":
+            if self.stream_block is None:
+                self.content = ""
+            elif self.stream_block != event["block"]:
+                self.content += "\n\n"
+            self.content += event["text"]
+            self.stream_block = event["block"]
+            self.phase, self.detail = "working", ""
         elif kind == "result":
             # Codex emits the answer as assistant text, followed by a completion
             # event containing only usage metadata. Keep the answer in that case.

@@ -101,7 +101,7 @@ def test_all_content_blocks_are_classified():
             }
         ),
     }
-    assert classify(row) == [("status", "thinking"), ("tool", "Bash: pwd")]
+    assert classify(row) == [("status", "thinking"), ("tool", "Bash")]
 
 
 def test_read_only_and_timestamp_collisions(tmp_path):
