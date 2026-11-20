@@ -8,12 +8,27 @@ from types import SimpleNamespace
 
 import pytest
 
+from slack_conductor.cli_sessions import runtime_for_cli
+from slack_conductor.conductor.attachment import Attachment
+from slack_conductor.conductor.client import Client
 from slack_conductor.conductor.journal import Unconfirmed
 from slack_conductor.config import Config
 from slack_conductor.remote import RemoteConductor
 from slack_conductor.remote_client import Dispatcher, run_client
 
 TOKEN = "secret-token-with-at-least-thirty-two-chars"
+
+
+def test_default_client_starts_native_daemon(tmp_path, monkeypatch):
+    # Keep the real transport and attachment lifecycle without probing the desktop.
+    monkeypatch.setattr(Attachment, "tick", lambda self, _: self.stop.wait())
+    stop = threading.Event()
+    stop.set()
+    config = Config(mode="client", state_dir=tmp_path)
+
+    run_client(config, TOKEN, stop)
+
+    assert isinstance(runtime_for_cli(config).native.transport, Client)
 
 
 def eventually(predicate, timeout=5):
