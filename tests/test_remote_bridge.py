@@ -11,6 +11,8 @@ from slack_conductor.notifications import Notifications
 from slack_conductor.poller import Poller
 from slack_conductor.remote import RemoteConductor
 from slack_conductor.remote_client import run_client
+from slack_conductor.remote_peer import LEGACY_STEERING_REJECTION, RemotePeer, submission_id
+from slack_conductor.runtime import Unsupported
 from slack_conductor.slack_app import Bridge
 from slack_conductor.store import Store
 from tests.support import Slack, message, result, status
@@ -287,3 +289,86 @@ def test_remote_poller_keeps_original_result_when_native_steer_is_unconfirmed(
     assert store.status(correction)["state"] == "complete"
     assert "did not confirm steering" in store.status(correction)["result"]
     assert store.status(original)["result"] == "Original result."
+
+
+@pytest.mark.parametrize("failure", [Unsupported, RuntimeError])
+def test_remote_submission_failure_survives_server_restart(
+    remote_observations, monkeypatch, failure
+):
+    store, _conn, _db, slack, remote, native = remote_observations
+
+    def reject_submission(*args, **kwargs):
+        raise failure("The turn cannot accept steering")
+
+    monkeypatch.setattr(native, "send", reject_submission)
+    slack.call = lambda *args, **kwargs: {"permalink": "https://slack.test/prompt"}
+    bridge = Bridge(remote.config, store, remote, slack, "B", "U1", "T1")
+    bridge.receive(event("2", "<@B> redirect"))
+    bridge.process(store.next_event())
+
+    saved = store.rows("SELECT * FROM statuses")[0]
+    assert saved["state"] == "waiting"
+    assert store.rows("SELECT state FROM events")[0]["state"] == "failed"
+    successor = RemotePeer(remote.config)
+    Poller(store, successor.db, slack).tick()
+
+    settled = store.status(saved["id"])
+    if failure is Unsupported:
+        assert settled["state"] == "complete"
+        assert settled["result"] == "Your message was not sent. The turn cannot accept steering"
+        assert "did not confirm" not in slack.edits[-1][1]
+    else:
+        assert settled["state"] == "waiting"
+        assert settled["result"] is None
+
+
+@pytest.mark.parametrize(
+    ("note", "response", "mode", "rejected"),
+    [
+        (
+            f"error: {LEGACY_STEERING_REJECTION}",
+            {"error": LEGACY_STEERING_REJECTION},
+            "steer",
+            True,
+        ),
+        (
+            f"error: {LEGACY_STEERING_REJECTION}",
+            {"error": LEGACY_STEERING_REJECTION},
+            "queue",
+            False,
+        ),
+        (f"error: {LEGACY_STEERING_REJECTION}", {"retry": True}, "steer", False),
+        ("error: lost acknowledgment", {"error": "lost acknowledgment"}, "steer", False),
+    ],
+)
+def test_poller_reconciles_only_legacy_pre_submit_failure(
+    bridge_state, tmp_path, monkeypatch, note, response, mode, rejected
+):
+    store, _conn, _db, slack = bridge_state
+    remote = RemotePeer(Config(state_dir=tmp_path, runtime_adapter="headless"))
+    status_id = status(store, "old-event", "redirect", send_mode=mode)
+    store.update(status_id, note=note)
+    key = "runtime:submit:" + submission_id("s", "redirect")
+    remote.receipts.begin(
+        key,
+        "runtime.submit",
+        {"session_id": "s", "prompt": "redirect", "options": {"send_mode": mode}},
+    )
+    remote.receipts.finish(key, response)
+    observed = []
+
+    def native_receipt(sid, prompt):
+        observed.append((sid, prompt))
+        return {"state": "absent"}
+
+    monkeypatch.setattr(remote.db, "receipt", native_receipt)
+    Poller(store, remote.db, slack).tick()
+
+    saved = store.status(status_id)
+    if rejected:
+        assert saved["state"] == "complete"
+        assert saved["result"] == f"Your message was not sent. {LEGACY_STEERING_REJECTION}"
+        assert not observed
+    else:
+        assert saved["state"] == "waiting"
+        assert observed == [("s", "redirect")]

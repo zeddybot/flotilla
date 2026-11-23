@@ -44,6 +44,9 @@ class RuntimeObservations:
     def receipt(self, sid, prompt):
         return self._observe(sid, prompt=prompt, view="receipt")["receipt"]
 
+    def submission_rejection(self, sid, prompt, note):
+        return self.remote.submission_rejection(sid, prompt, note)
+
     def pickup(self, sid, prompt):
         receipt = self.receipt(sid, prompt)
         if receipt["state"] == "picked_up":

@@ -46,6 +46,16 @@ class Receipts:
         with self.connect() as c:
             c.execute("UPDATE calls SET response=? WHERE id=?", (json.dumps(response), key))
 
+    def saved(self, key):
+        with self.connect() as c:
+            row = c.execute(
+                "SELECT request,response FROM calls WHERE id=? AND response IS NOT NULL",
+                (key,),
+            ).fetchone()
+        if row:
+            return json.loads(row[0]), json.loads(row[1])
+        return None
+
     def bind(self, bindings):
         with self.connect() as c:
             c.executemany("INSERT OR REPLACE INTO bindings VALUES (?,?)", bindings.items())

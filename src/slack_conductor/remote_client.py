@@ -13,7 +13,7 @@ from websockets.sync.client import connect
 from .conductor.journal import Unconfirmed
 from .remote import MAX_MESSAGE, VERSION
 from .remote_journal import Receipts
-from .runtime import MUTATIONS, RUNTIME_VERSION, dispatch
+from .runtime import MUTATIONS, RUNTIME_VERSION, Unsupported, dispatch
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +66,10 @@ class Dispatcher:
                 if method.startswith("files.")
                 else {"retry": True}
             )
+        except Unsupported as exc:
+            response = {"error": str(exc)}
+            if method == "runtime.submit":
+                response["error_type"] = "submission_rejected"
         except (RuntimeError, ValueError, KeyError, TypeError) as exc:
             response = {"error": str(exc)}
         if durable and key:
