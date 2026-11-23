@@ -16,16 +16,14 @@ BOOTSTRAP_PREFIX = "/* Flotilla native bridge */"
 # How long the frontend keeps intercepting without an acknowledged heartbeat before
 # it rests. Injected into its config so both ends share one number.
 FRONTEND_RELEASE = 30
-# Re-attaching foregrounds Conductor, so it is reserved for a frontend that is gone.
-# One that is only wedged or resting finds the daemon again within this grace.
-REATTACH_GRACE = FRONTEND_RELEASE
+# Chromium can batch a hidden window's timer callbacks once per minute.
+# Allow a full cycle plus scheduling slack before opening any UI.
+REATTACH_GRACE = 75
 # A tick slower than this means the machine stalled, and the frontend with it.
 STALL = 3
 # Stalls restart the grace. Past this much silence the bootstrap goes ahead anyway.
 SILENCE_LIMIT = 120
-# A working bridge outranks keeping focus, so a failed bootstrap is retried on this
-# schedule whatever app is in front. Nobody is watching a locked screen, and
-# selecting Conductor gives the focus away already: both retry at the first delay.
+# A genuine outage still gets automatic recovery while the desktop is available.
 RETRY_DELAYS = (60, 120, 300)
 
 
@@ -63,6 +61,8 @@ def attach(transport):
 
     ax = Inspector()
     front = Inspector.focused_pid()
+    if transport.online():
+        return
     if front is None:
         log.warning("Foreground app unknown; Conductor will stay in front after the bootstrap")
     log.info("Attaching Conductor frontend; previous app PID %s", front)
@@ -85,20 +85,14 @@ def restore(inspector, front, conductor):
     log.info("Conductor bootstrap finished; foreground app PID %s", inspector.focused_pid())
 
 
-def retry_delay(inspector, failures):
-    try:
-        unattended = inspector.unattended()
-    except Exception:  # noqa: BLE001 - an unreadable session must not stop the retries
-        unattended = False
-    return RETRY_DELAYS[0 if unattended else min(failures, len(RETRY_DELAYS)) - 1]
-
-
 def _attach(transport, ax):
     import Quartz
 
     from .inspector import Inspector, attr, walk
 
     with ax.reachable():
+        if transport.online():
+            return
         Inspector.activate(ax.pid)
         menu = next(
             (
@@ -110,11 +104,13 @@ def _attach(transport, ax):
         )
         if menu is None:
             raise RuntimeError("Conductor Inspector unavailable")
-        prompt = ax.console_prompt()
-        opened = prompt is None
+        if transport.online():
+            return
+        opened = False
         try:
-            if opened:
+            if ax.console_prompt() is None and ax.devtools() is None:
                 ax.press(menu)
+                opened = True
                 time.sleep(0.5)
             prompt = ax.console_prompt()
             if prompt is None:
@@ -132,6 +128,8 @@ def _attach(transport, ax):
                     "Inspector console has a draft; clear it to allow attachment: "
                     + repr(draft[:80])
                 )
+            if transport.online():
+                return
             config = transport.attach(incarnation())
             transport.bootstrap = (
                 Path(__file__)
@@ -170,7 +168,7 @@ def _attach(transport, ax):
                 20,
             )
         finally:
-            if opened and ax.console_prompt() is not None:
+            if opened:
                 ax.close_console()
 
 
@@ -233,6 +231,10 @@ class Attachment:
             state.update(
                 failures=0, offline_since=None, silent_since=None, established=True, attached=True
             )
+        elif Inspector.unattended():
+            # The console cannot be operated at the login window. Give the
+            # existing renderer its whole recovery window when the user returns.
+            state.update(offline_since=None, silent_since=None)
         else:
             now = time.monotonic()
             if state["silent_since"] is None:
@@ -251,14 +253,13 @@ class Attachment:
             if settled and self.due(state, current, Inspector):
                 try:
                     attach(self.transport)
-                    log.info("Conductor native frontend attached")
-                    state.update(failures=0, attached=True)
+                    log.info("Conductor native frontend ready")
+                    state.update(failures=0, attached=True, established=True)
                 except Exception as exc:
                     state["failures"] += 1
                     state["attempted_at"] = time.monotonic()
-                    state["retry_at"] = state["attempted_at"] + retry_delay(
-                        Inspector, state["failures"]
-                    )
+                    delay = RETRY_DELAYS[min(state["failures"], len(RETRY_DELAYS)) - 1]
+                    state["retry_at"] = state["attempted_at"] + delay
                     log.warning("Conductor attachment pending: %s", exc, exc_info=True)
         # Keep observing process changes during backoff so a new app launch
         # or crash does not inherit the old frontend's retry delay.

@@ -190,8 +190,11 @@ class Inspector:
     def console_tab(self):
         return self.find(role="AXRadioButton", title="Console")
 
+    def devtools(self):
+        return self.find(role="AXWebArea", title="DevTools")
+
     def close_console(self):
-        devtools = self.find(role="AXWebArea", title="DevTools")
+        devtools = self.devtools()
         if devtools is not None:
             close = self.find(root=devtools, role="AXButton", title="Close")
             if close is not None:

@@ -41,9 +41,9 @@ runs and leaves Conductor in front. On this Mac, helper shutdown
 or reinstallation can itself foreground Conductor before bootstrap captures focus,
 so restoration is best effort. The accepted startup tradeoff is a brief foreground
 transition; ordinary message dispatch does not interact with the UI. After a failed attachment,
-retries run after 1, 2 and then every 5 minutes whatever app is in front, because a
-working bridge outranks keeping focus. With the screen locked, or once Conductor is
-selected, they run every minute. Process
+retries run after 1, 2 and then every 5 minutes on an available desktop. Selecting
+Conductor allows a retry after one minute. The bridge defers Inspector while the
+screen is locked or asleep and gives the existing frontend time to resume after unlock. Process
 changes are still observed during backoff. Inspector lookup visits shallow controls
 before deep logs, and checks AeroSpace placement even when an AXWindow exists.
 
@@ -53,9 +53,11 @@ with failed requests. An unanswered one rests it after the release window, and a
 daemon that is shutting down rests it at once: the user's pause, resume and send
 go straight through, command polling stops, and a probe every 2 seconds waits for a daemon.
 The one that answers resumes it and is told the latest action missed per session.
-Re-attaching foregrounds Conductor, so the daemon only does it after a full grace
-period of its own running time without a heartbeat; time lost to a machine stall
-does not count, up to 2 minutes of silence. Detach is idempotent; a late callback cannot unwrap a newer
+An established frontend gets 75 seconds after its heartbeat goes stale before the
+daemon opens Inspector. This allows a hidden window to send its next batched heartbeat.
+Mac stalls restart the grace period, up to two minutes of silence on an available desktop.
+The daemon rechecks the connection before opening DevTools and closes any sidebar it
+opened even if the console prompt never appears. Detach is idempotent; a late callback cannot unwrap a newer
 attachment. Shutdown commands are scoped to their attachment and retired before a
 replacement can claim them, including records from older versions.
 
