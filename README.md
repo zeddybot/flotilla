@@ -36,6 +36,8 @@ The prompt encourages agents to @mention people they address directly or need ac
 
 The tokens must lead the prompt, after an optional bot mention. Model, effort, and fast mode are configured when a session starts; use `[new]` to change them. Verbose stays enabled in the Slack thread. `[queue]` applies to the message it prefixes. The next untagged message steers if the session supports steering. Model/effort/fast selection is best effort; mismatches appear in the status. Unknown bracket tokens remain prompt text. `[close]` archives the mapped workspace and may stop its running agent. `[new]` maps the thread to a new workspace; any older active turn still delivers its own result.
 
+If Conductor cannot save a checkpoint during `[close]`, the workspace stays open. After checking the worktree, send a new `[close]` to retry the safe archive.
+
 On a Mac, Flotilla calls Conductor’s native services for session operations. The Slack thread stays bound to its session while you navigate in Conductor. Inspector opens briefly during startup or reconnection to attach the native dispatcher. Accessibility permission is needed for that bootstrap. Prompts go through the dispatcher. Headless workers use the Claude and Codex CLIs directly.
 
 ## Recovery and diagnostics

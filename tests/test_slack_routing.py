@@ -30,7 +30,7 @@ def endpoint(config):
         create_session=lambda key, options: {"id": "w", "active_session_id": "s"},
         validate=lambda wid, sid: {"id": wid, "active_session_id": sid},
         send=lambda *args: sends.append(args) or "",
-        archive=lambda *args: mutations.append(("archive", args)),
+        archive=lambda *args, **kwargs: mutations.append(("archive", args, kwargs)),
         probe=lambda: {
             "capabilities": dict.fromkeys(
                 ("create", "queue", "steer", "interrupt", "close_session", "respond"), True
@@ -315,6 +315,61 @@ def test_atomic_first_summoner_routes_to_one_client_and_survives_restart(tmp_pat
     assert len(endpoints[winner].sent) == 3
     assert not endpoints[loser].sent
     assert all(row[0] == guest for row in bridge.slack.posts[-6:])
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_close_uses_saved_event_identity_across_retry(tmp_path, legacy):
+    bridge, _ = setup(tmp_path)
+    store = bridge.store
+    store.bind("C1", "1", {"id": "w", "active_session_id": "s"}, {})
+    attempts = []
+
+    def archive(wid, sid, *, command_id=None):
+        assert (wid, sid) == ("w", "s")
+        attempts.append(command_id)
+        if len(attempts) == 1:
+            raise Unconfirmed("conductor returned no acknowledgement")
+        if len(attempts) == 2:
+            raise RuntimeError("safe archive failed")
+
+    bridge.conductor.archive = archive
+    assert bridge.receive(event("U1", "2", "<@B> [close]", thread="1"))
+    envelope = store.next_event()
+    if legacy:
+        store.add_status(envelope["key"], "C1", "1", "", {})
+    bridge.process(envelope)
+    bridge.process(envelope)
+    assert bridge.receive(event("U1", "3", "<@B> [close]", thread="1"))
+    bridge.process(store.next_event())
+    original_key = None if legacy else "T1:C1:2"
+    assert attempts == [original_key, original_key, "T1:C1:3"]
+    assert store.thread("C1", "1")["state"] == "archived"
+
+
+def test_replayed_close_does_not_archive_rebound_thread(tmp_path):
+    bridge, _ = setup(tmp_path)
+    store = bridge.store
+    store.bind("C1", "1", {"id": "w", "active_session_id": "s"}, {})
+    attempts = []
+
+    def archive(wid, sid, *, command_id=None):
+        attempts.append((wid, sid, command_id))
+        raise Unconfirmed("conductor returned no acknowledgement")
+
+    bridge.conductor.archive = archive
+    assert bridge.receive(event("U1", "2", "<@B> [close]", thread="1"))
+    envelope = store.next_event()
+    bridge.process(envelope)
+    store.bind("C1", "1", {"id": "w2", "active_session_id": "s2"}, {})
+    bridge.process(envelope)
+
+    assert attempts == [("w", "s", "T1:C1:2")]
+    thread = store.thread("C1", "1")
+    assert (thread["workspace_id"], thread["session_id"], thread["state"]) == (
+        "w2",
+        "s2",
+        "running",
+    )
 
 
 def test_legacy_mac_is_default_and_existing_queue_stays_after_switch(tmp_path):

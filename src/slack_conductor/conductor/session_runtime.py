@@ -331,7 +331,11 @@ class ConductorRuntime:
         saved = self.receipts.begin(command_id, "close_session", {"session_id": session_id})
         if saved is not None:
             return saved["value"]
-        self.native.archive(wid, session_id)
+        # Legacy RPC and CLI requests must keep their existing native journal key.
+        if isinstance(command_id, str) and command_id.startswith("runtime:close-event:"):
+            self.native.archive(wid, session_id, command_id=command_id)
+        else:
+            self.native.archive(wid, session_id)
         value = {"session_id": session_id, "state": "archived"}
         self.receipts.finish(command_id, {"value": value})
         return value
