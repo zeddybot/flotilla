@@ -1,4 +1,4 @@
-"""Stdio client for a single Claude stream-json turn."""
+"""Stdio client for a Claude stream-json turn and its background callbacks."""
 
 import json
 import os
@@ -18,10 +18,13 @@ class ClaudeStream:
         os.set_blocking(self._stdin, False)
         self.events = queue.Queue()
         self._lock = threading.Lock()
+        self._result_handled = threading.Event()
+        self._result_handled.set()
         self._pending = {}
         self._starting = None
         self._started = False
         self._closed = False
+        self._input_closed = False
         self._write_failed = False
         self._session_id = None
         self._reader = threading.Thread(target=self._read, daemon=True)
@@ -53,6 +56,10 @@ class ClaudeStream:
         with self._lock:
             if self._closed:
                 raise Rejected("The Claude turn has already ended")
+            if self._input_closed:
+                raise Rejected("The Claude input stream has closed")
+            if not self._result_handled.is_set():
+                raise Rejected("Claude is settling the current result")
             if self._write_failed:
                 raise Rejected("The Claude input stream is unavailable")
             if thread_id is None:
@@ -80,6 +87,7 @@ class ClaudeStream:
             pending, self._pending = self._pending, {}
         for response in pending.values():
             response.set_exception(error)
+        self._result_handled.set()
         if fatal:
             self.events.put(error)
 
@@ -100,13 +108,17 @@ class ClaudeStream:
                 ):
                     self._observe(source)
                 self.events.put(line)
+                # Read no more native acknowledgements until execution decides
+                # whether this result is provisional or closes the turn.
+                self._result_handled.wait()
                 if self._closed:
                     return
         except (OSError, RuntimeError, ValueError) as exc:
             self._close_pending(exc, fatal=True)
         finally:
             self._close_pending(
-                RuntimeError("Claude stream disconnected before completing the turn"), fatal=True
+                RuntimeError("Claude stream disconnected before completing the turn"),
+                fatal=not self._input_closed,
             )
             self.events.put(None)
 
@@ -114,18 +126,24 @@ class ClaudeStream:
         kind = source.get("type")
         session_id = source.get("session_id")
         if kind == "result":
-            if not self._started:
-                raise RuntimeError("Claude turn ended before acknowledging the initial input")
-            if session_id != self._session_id:
-                raise RuntimeError("Claude completed an unexpected session")
-            self._close_pending(RuntimeError("Claude turn ended before acknowledging the steer"))
-            return
+            with self._lock:
+                if not self._started:
+                    raise RuntimeError("Claude turn ended before acknowledging the initial input")
+                if session_id != self._session_id:
+                    raise RuntimeError("Claude completed an unexpected session")
+                if not self._closed and not self._input_closed:
+                    self._result_handled.clear()
+                return
 
         with self._lock:
             if self._closed:
                 return
             if kind == "system" and source.get("subtype") == "init":
-                if not isinstance(session_id, str) or not session_id or self._session_id:
+                if (
+                    not isinstance(session_id, str)
+                    or not session_id
+                    or self._session_id not in (None, session_id)
+                ):
                     raise RuntimeError("Claude reported an unexpected session identity")
                 self._session_id = session_id
             if kind != "user" or source.get("isReplay") is not True:
@@ -145,6 +163,18 @@ class ClaudeStream:
             if isinstance(line, Exception):
                 raise line
             yield line
+
+    def finish(self):
+        self._close_pending(RuntimeError("Claude turn ended before acknowledging the steer"))
+
+    def continue_callbacks(self):
+        self._result_handled.set()
+
+    def close_input(self):
+        with self._lock:
+            self._input_closed = True
+            self.process.stdin.close()
+            self._result_handled.set()
 
     def close(self):
         self._close_pending(

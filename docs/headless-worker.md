@@ -31,7 +31,7 @@ daytona exec flotilla-headless-worker -- touch /data/config/HOLD
 daytona exec flotilla-headless-worker -- rm /data/config/HOLD
 ```
 
-The supervisor gives the child 35 seconds after a stop request, then kills it if needed. Stopping a worker while a turn is launching or running creates an attention state on restart; it does not automatically repeat that prompt.
+The supervisor gives the child 35 seconds to stop. Claude keeps running after an interim answer while its background tasks finish. You can steer during that wait. If the worker loses the callback, it reports the interrupted work and preserves the native conversation for a follow-up when its journal establishes what happened. An ambiguous launch or an unresolved question still needs attention. Recovery never repeats the original prompt automatically.
 
 ## Operate sessions
 
