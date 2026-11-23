@@ -94,7 +94,12 @@ class Execution:
                 is_codex = session["engine"] == "codex"
                 process = launch(args, session["path"], duplex=True)
                 self._processes[sid] = process
-                channel = CodexServer(process) if is_codex else ClaudeStream(process)
+                if is_codex:
+                    channel = CodexServer(process)
+                else:
+                    channel = ClaudeStream(
+                        process, resume_session=None if first else session["native_id"]
+                    )
             if is_codex:
                 lines = self._codex_lines(channel, session, turn)
             else:

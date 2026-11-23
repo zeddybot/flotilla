@@ -90,23 +90,7 @@ def observe(runtime, session_id, after=0, prompt=None, segment_id=None, view="al
         else page["cursor"]
         if page
         else after,
-        "receipt": {
-            "state": "picked_up"
-            if receipt["pickup_seq"]
-            else (
-                {"steering": "pending"}.get(receipt["state"], receipt["state"])
-                if receipt["segment_id"] is not None
-                else "queued"
-            ),
-            "seq": receipt["pickup_seq"],
-            "segment_id": (receipt["segment_id"] or receipt["id"])
-            if receipt["pickup_seq"]
-            else None,
-        }
-        if receipt
-        else {"state": "received", "seq": None, "segment_id": None}
-        if prompt is not None
-        else None,
+        "receipt": _receipt(receipt) if prompt is not None else None,
         "later_input": bool(later) if view == "later_input" else None,
         "latest_segment": latest["id"] if latest and view == "latest_segment" else None,
         "has_more": page["has_more"] if page else False,
@@ -114,3 +98,19 @@ def observe(runtime, session_id, after=0, prompt=None, segment_id=None, view="al
         "freshness": freshness,
         "rest": rest,
     }
+
+
+def _receipt(turn):
+    if turn is None:
+        return {"state": "received", "seq": None, "segment_id": None}
+    if turn["pickup_seq"] is not None:
+        return {
+            "state": "picked_up",
+            "seq": turn["pickup_seq"],
+            "segment_id": turn["segment_id"] or turn["id"],
+        }
+    if turn["segment_id"] is not None:
+        state = {"steering": "pending"}.get(turn["state"], turn["state"])
+    else:
+        state = "launch_unconfirmed" if turn["state"] == "attention" else "queued"
+    return {"state": state, "seq": None, "segment_id": None}

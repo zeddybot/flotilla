@@ -11,7 +11,7 @@ from slack_conductor.headless.process_host import Rejected
 
 
 @pytest.fixture()
-def channel():
+def channel(request):
     engine_in, client_out = os.pipe()
     client_in, engine_out = os.pipe()
     with (
@@ -20,7 +20,10 @@ def channel():
         os.fdopen(client_in) as client_stdout,
         os.fdopen(client_out, "w") as client_stdin,
     ):
-        stream = ClaudeStream(SimpleNamespace(stdin=client_stdin, stdout=client_stdout))
+        stream = ClaudeStream(
+            SimpleNamespace(stdin=client_stdin, stdout=client_stdout),
+            resume_session=getattr(request, "param", None),
+        )
         try:
             yield stream, inputs, outputs
         finally:
@@ -109,6 +112,29 @@ def test_disconnect_unblocks_pending_initial_input(channel):
         receive(inputs)
         outputs.close()
         with pytest.raises(RuntimeError, match="disconnected"):
+            initializing.result(timeout=2)
+
+
+@pytest.mark.parametrize("channel", ["session"], indirect=True)
+@pytest.mark.parametrize(
+    "result", [{"is_error": True}, {"origin": {}}, {"user_message_uuids": ["own"]}]
+)
+def test_unacknowledged_resume_does_not_ignore_a_launch_result(channel, result):
+    stream, inputs, outputs = channel
+    with ThreadPoolExecutor() as pool:
+        initializing = pool.submit(stream.start, "new prompt", "input-id", 2)
+        message_id = receive(inputs)["uuid"]
+        send(outputs, "system", subtype="init")
+        fields = {
+            "subtype": "success",
+            "is_error": False,
+            "origin": {"kind": "task-notification"},
+            **result,
+        }
+        if fields.get("user_message_uuids"):
+            fields["user_message_uuids"] = [message_id]
+        send(outputs, "result", **fields)
+        with pytest.raises(RuntimeError, match="before acknowledging"):
             initializing.result(timeout=2)
 
 

@@ -146,6 +146,15 @@ class Poller:
                     if hasattr(self.db, "receipt"):
                         receipt = self.db.receipt(sid, prompt)
                         state = receipt["state"]
+                        if state == "launch_unconfirmed":
+                            self.finish(
+                                status,
+                                "The worker did not confirm that the agent received your message. "
+                                "Check the session before resending.",
+                                "attention",
+                                clear_note=True,
+                            )
+                            continue
                         if state in {"rejected", "uncertain"}:
                             text = (
                                 "The active turn could not accept steering."

@@ -291,6 +291,32 @@ def test_remote_poller_keeps_original_result_when_native_steer_is_unconfirmed(
     assert store.status(original)["result"] == "Original result."
 
 
+def test_remote_poller_distinguishes_unconfirmed_launch_from_queued_followup(
+    remote_observations, monkeypatch
+):
+    store, _conn, db, slack, remote, _native = remote_observations
+    failed = status(store, "failed-launch", "open", cursor=db.cursor("s"))
+    queued = status(store, "queued-followup", "follow up", cursor=db.cursor("s"))
+    monkeypatch.setattr(
+        remote.db,
+        "receipt",
+        lambda sid, prompt: {
+            "state": "launch_unconfirmed" if prompt == "open" else "queued",
+            "seq": None,
+            "segment_id": None,
+        },
+    )
+
+    Poller(store, remote.db, slack, settle_seconds=0).tick()
+
+    assert store.status(failed)["state"] == "complete"
+    assert store.status(failed)["result"] == (
+        "The worker did not confirm that the agent received your message. "
+        "Check the session before resending."
+    )
+    assert store.status(queued)["state"] == "waiting"
+
+
 @pytest.mark.parametrize("failure", [Unsupported, RuntimeError])
 def test_remote_submission_failure_survives_server_restart(
     remote_observations, monkeypatch, failure
