@@ -46,6 +46,35 @@ def fixture(tmp_path):
     return adapter, path
 
 
+def test_safe_archive_records_attempts_by_command_identity(tmp_path):
+    adapter, path = fixture(tmp_path)
+    adapter.validate = lambda wid, sid: {"id": wid, "active_session_id": sid}
+    journal = adapter.transport.journal
+    native_attempts = []
+
+    def call(body, *, key):
+        journal.enqueue(key, body)
+        command = journal.claim("app")
+        if command:
+            assert command["body"] == {"op": "archive", "wid": "w", "sid": "s"}
+            native_attempts.append(command["id"])
+            response = (
+                {"value": True} if len(native_attempts) == 3 else {"error": "safe archive failed"}
+            )
+            journal.complete(command["id"], "app", response)
+        return journal.wait(key, timeout=1)
+
+    adapter.transport.call = call
+    for command_id in (None, None, "event-1", "event-1"):
+        with pytest.raises(RuntimeError, match="safe archive failed"):
+            adapter.archive("w", "s", command_id=command_id)
+    assert adapter.archive("w", "s", command_id="event-2") == ""
+    with closing(sqlite3.connect(path)) as db, db:
+        db.execute("UPDATE workspaces SET state='archived' WHERE local_id='w'")
+    assert adapter.archive("w", "s", command_id="event-3") == ""
+    assert native_attempts == ["archive:w", "archive:command:event-1", "archive:command:event-2"]
+
+
 def test_failed_watch_is_isolated_retried_and_reset_on_reattachment(tmp_path, monkeypatch):
     adapter, path = fixture(tmp_path)
     clock = [100.0]

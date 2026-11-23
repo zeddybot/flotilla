@@ -272,14 +272,28 @@ class Bridge:
             elif command == "close":
                 if not thread:
                     raise ValueError("This thread has no workspace")
-                status_id = self.store.add_status(key, channel, thread_ts, "", options)
-                status_ts = self.store.status(status_id)["status_ts"] or self.slack.post(
+                target = {name: thread[name] for name in ("workspace_id", "session_id")}
+                status_id = self.store.add_status(
+                    key, channel, thread_ts, "", {**options, "close": {**target, "command_id": key}}
+                )
+                saved = self.store.status(status_id)
+                status_ts = saved["status_ts"] or self.slack.post(
                     channel, thread_ts, render("archiving"), f"status:{key}"
                 )
                 self.store.update(status_id, status_ts=status_ts)
                 if self.routed:
                     self.probe("close_session")
-                self.conductor.archive(thread["workspace_id"], thread["session_id"])
+                # A close already persisted by an older bridge uses its original RPC key.
+                close = json.loads(saved["options"]).get("close")
+                if close and any(close[name] != value for name, value in target.items()):
+                    raise ValueError(
+                        "This close request belongs to the thread's previous workspace."
+                    )
+                self.conductor.archive(
+                    thread["workspace_id"],
+                    thread["session_id"],
+                    command_id=close["command_id"] if close else None,
+                )
                 self.store.thread_state(thread, "archived")
                 self.poller.finish(self.store.status(status_id), "", "archived")
             else:

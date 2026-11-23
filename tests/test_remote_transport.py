@@ -77,6 +77,8 @@ class FakeConductor:
         self.db = FakeDB()
         self.transport = SimpleNamespace(online=lambda: True, bindings={})
         self.created = self.sent = self.archived = 0
+        self.archive_commands = []
+        self.archive_error = None
         self.closed = False
         self.send_started = threading.Event()
         self.release_send = threading.Event()
@@ -105,8 +107,11 @@ class FakeConductor:
             assert self.release_send.wait(5)
         return "queued"
 
-    def archive(self, wid, sid):
+    def archive(self, wid, sid, *, command_id=None):
         self.archived += 1
+        self.archive_commands.append(command_id)
+        if self.archive_error:
+            raise RuntimeError(self.archive_error)
         return True
 
 
@@ -169,12 +174,35 @@ def test_durable_responses_survive_receipt_reopen(remote_pair):
     assert server.archive("w1", "s1") == ""
     assert server.archive("w1", "s1") == ""
     assert native.archived == 1
+    assert native.archive_commands == [None]
     from slack_conductor.remote_journal import Receipts
 
     reopened = Receipts(config.state_dir / "remote.sqlite")
     assert reopened.begin(
         "runtime:create:create-1", "runtime.create", {"command_id": "create-1", "spec": {}}
     ) == {"value": {"workspace_id": "w1", "session_id": "s1", "spec": {}}}
+
+
+def test_new_archive_event_retries_a_journaled_failure(remote_pair):
+    server, _config, native, _stop, worker = remote_pair
+    worker.start()
+    eventually(server.ready)
+    server.new_workspace(key="create-1")
+    native.archive_error = "native safe archive failed"
+    for command_id in (None, "event-1"):
+        with pytest.raises(RuntimeError, match="native safe archive failed"):
+            server.archive("w1", "s1", command_id=command_id)
+    native.archive_error = None
+    for command_id in (None, "event-1"):
+        with pytest.raises(RuntimeError, match="native safe archive failed"):
+            server.archive("w1", "s1", command_id=command_id)
+    assert server.archive("w1", "s1", command_id="event-2") == ""
+    assert server.archive("w1", "s1", command_id="event-2") == ""
+    assert native.archive_commands == [
+        None,
+        "runtime:close-event:event-1",
+        "runtime:close-event:event-2",
+    ]
 
 
 def test_lost_ack_replay_does_not_repeat_native_send(tmp_path):

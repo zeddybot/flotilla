@@ -253,10 +253,11 @@ class Conductor:
             )
         return warning
 
-    def archive(self, wid, sid):
+    def archive(self, wid, sid, *, command_id=None):
         if self.db.workspace(wid)["state"] != "archived":
             self.validate(wid, sid)
-            self.transport.call({"op": "archive", "wid": wid, "sid": sid}, key="archive:" + wid)
+            key = "archive:" + wid if command_id is None else "archive:command:" + command_id
+            self.transport.call({"op": "archive", "wid": wid, "sid": sid}, key=key)
         self.transport.bindings.pop(sid, None)
         return ""
 

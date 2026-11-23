@@ -231,8 +231,10 @@ class RemotePeer:
                 return LEGACY_STEERING_REJECTION
         return None
 
-    def archive(self, wid, sid):
-        command = "runtime:close:" + wid
+    def archive(self, wid, sid, *, command_id=None):
+        command = (
+            "runtime:close:" + wid if command_id is None else "runtime:close-event:" + command_id
+        )
         self.rpc("runtime.close_session", {"command_id": command, "session_id": sid}, key=command)
         return ""
 

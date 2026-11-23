@@ -60,8 +60,8 @@ class FakeNative:
         self.sends.append((wid, sid, prompt, options, message_id))
         return ""
 
-    def archive(self, wid, sid):
-        self.archives.append((wid, sid))
+    def archive(self, wid, sid, *, command_id=None):
+        self.archives.append((wid, sid, command_id))
 
 
 def _runtime(tmp_path, native=None):
@@ -195,7 +195,7 @@ def test_configuration_is_fixed_and_archive_replays(tmp_path):
     assert native.sends[0][3]["effort"] == "high"
     assert "use [new]" in receipt["warning"]
     assert runtime.close_session("close", "s1") == runtime.close_session("close", "s1")
-    assert native.archives == [("w1", "s1")]
+    assert native.archives == [("w1", "s1", None)]
 
 
 def test_dispatcher_accepts_runtime_wire_only(tmp_path):
