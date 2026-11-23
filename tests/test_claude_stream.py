@@ -48,6 +48,16 @@ def start(pool, channel):
     return request["uuid"]
 
 
+def finish_result(stream, lines):
+    for line in lines:
+        source = json.loads(line)
+        if source.get("type") == "result" and not source.get("parent_tool_use_id"):
+            stream.finish()
+            assert list(lines) == []
+            return source["result"]
+    raise AssertionError("Claude did not emit a result")
+
+
 def test_steer_confirms_exact_top_level_replay_and_finishes_at_first_result(channel):
     stream, inputs, outputs = channel
     with ThreadPoolExecutor() as pool:
@@ -70,7 +80,7 @@ def test_steer_confirms_exact_top_level_replay_and_finishes_at_first_result(chan
         send(outputs, "user", uuid=steer_uuid, isReplay=True)
         steering.result(timeout=2)
         send(outputs, "result", result="corrected")
-        assert json.loads(list(lines)[-1])["result"] == "corrected"
+        assert finish_result(stream, lines) == "corrected"
         with pytest.raises(Rejected, match="already ended"):
             stream.steer_async("session", "turn", "late correction", "late-id")
         assert not select([inputs], [], [], 0)[0]
@@ -84,9 +94,9 @@ def test_result_before_acknowledgement_marks_steer_ambiguous(channel):
         request = receive(inputs)
         send(outputs, "result", result="original")
         send(outputs, "user", uuid=request["uuid"], isReplay=True)
+        assert finish_result(stream, stream.lines()) == "original"
         with pytest.raises(RuntimeError, match="turn ended before acknowledging"):
             steering.result(timeout=2)
-        assert json.loads(list(stream.lines())[-1])["result"] == "original"
         with pytest.raises(Rejected, match="already ended"):
             stream.steer_async("session", "turn", "correction", "steer-id")
         assert not select([inputs], [], [], 0)[0]
@@ -128,4 +138,4 @@ def test_pending_replays_are_tracked_independently(channel):
         send(outputs, "user", uuid=first_uuid, isReplay=True)
         first.result(timeout=2)
         send(outputs, "result", result="corrected")
-        assert json.loads(list(stream.lines())[-1])["result"] == "corrected"
+        assert finish_result(stream, stream.lines()) == "corrected"

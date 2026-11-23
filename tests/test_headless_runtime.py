@@ -32,6 +32,46 @@ if engine == 'claude':
 
     print(json.dumps({'type':'system','subtype':'init','session_id':identity}), flush=True)
     replay(first_input)
+    if prompt == 'stale-job':
+        print(json.dumps({'type': 'system', 'subtype': 'task_notification', 'status': 'completed',
+            'session_id': identity, 'task_id': 'job'}), flush=True)
+    if prompt in {'background', 'background-early', 'background-exit', 'background-folded'}:
+        task = {'type': 'system', 'session_id': identity, 'task_id': 'job'}
+        print(json.dumps({**task, 'subtype': 'task_started'}), flush=True)
+        if prompt in {'background-early', 'background-folded'}:
+            print(json.dumps({**task, 'subtype': 'task_notification', 'status': 'completed'}), flush=True)
+        if prompt == 'background-folded':
+            print(json.dumps({'type': 'result', 'session_id': identity, 'result': 'Combined answer'}), flush=True)
+            assert sys.stdin.readline() == ''
+            sys.exit(0)
+        print(json.dumps({'type': 'result', 'session_id': identity, 'result': 'Waiting'}), flush=True)
+        if prompt == 'background-exit':
+            sys.exit(0)
+        if prompt == 'background':
+            print(json.dumps({**task, 'subtype': 'task_notification', 'status': 'running'}), flush=True)
+            correction = json.loads(sys.stdin.readline())
+            print(json.dumps({**task, 'subtype': 'task_notification', 'status': 'completed'}), flush=True)
+            replay(correction)
+        assert sys.stdin.readline() == ''
+        release = Path(os.environ['HEADLESS_CALLS'] + '.release')
+        while not release.exists():
+            time.sleep(0.02)
+        print(json.dumps({'type':'system','subtype':'init','session_id':identity}), flush=True)
+    if prompt == 'background-overlap':
+        task = {'type': 'system', 'session_id': identity}
+        def system(subtype, **fields):
+            print(json.dumps({**task, 'subtype': subtype, **fields}), flush=True)
+        system('task_started', task_id='first-job')
+        system('task_started', task_id='second-job')
+        system('task_notification', task_id='first-job', status='completed')
+        print(json.dumps({'type': 'result', 'session_id': identity, 'result': 'Waiting'}), flush=True)
+        system('init')
+        system('task_notification', task_id='second-job', status='completed')
+        print(json.dumps({'type': 'result', 'session_id': identity, 'result': 'First callback'}), flush=True)
+        release = Path(os.environ['HEADLESS_CALLS'] + '.release')
+        while not release.exists():
+            time.sleep(0.02)
+        system('init')
     if prompt == 'slow':
         time.sleep(10)
     output = 'claude answer'
@@ -49,6 +89,8 @@ if engine == 'claude':
     print(json.dumps({'type':'assistant','session_id':identity,'message':{'content':[{'type':'text','text':output}]}}), flush=True)
     if prompt != 'no-result':
         print(json.dumps({'type':'result','session_id':identity,'result':output}), flush=True)
+    if prompt == 'finish-before-replay':
+        replay(correction)
 else:
     identity = '22222222-2222-4222-8222-222222222222'
     turn = {'id': 'native-turn', 'status': 'inProgress'}
@@ -229,6 +271,174 @@ def test_missing_completion_requires_attention(tmp_path, monkeypatch):
     _wait(lambda: runtime.describe(sid)["activity"] == "attention")
     assert runtime.observe(sid, view="snapshot")["rest"]["confirmed"] is False
     runtime.shutdown()
+
+
+@pytest.mark.parametrize("prompt", ["background", "background-early"])
+def test_background_steering_waits_for_callback_result(tmp_path, monkeypatch, prompt):
+    config, calls = _fixture(tmp_path)
+    monkeypatch.setenv("HEADLESS_CALLS", str(calls))
+    runtime = HeadlessRuntime(config)
+    sid = runtime.create("create", {})["session_id"]
+    runtime.start({sid: sid})
+    try:
+        runtime.submit("send", sid, "m", "r", prompt, {})
+        _wait(lambda: runtime.observe(sid)["rest"]["result_candidate"])
+        assert runtime.observe(sid)["rest"]["pending_jobs"] == (
+            ["job"] if prompt == "background" else []
+        )
+        assert runtime.observe(sid)["snapshot"]["status"] == "working"
+
+        def steer():
+            return runtime.submit("steer", sid, "m2", "r2", "stop", {"send_mode": "steer"})
+
+        if prompt == "background-early":
+            receipt = steer()
+            assert receipt["state"] == "queued"
+            assert steer() == receipt
+            assert runtime.observe(sid, prompt="stop")["receipt"]["state"] == "queued"
+        else:
+            assert steer()["state"] == "pending"
+            _wait(lambda: runtime.observe(sid, prompt="stop")["receipt"]["state"] == "picked_up")
+            _wait(lambda: not runtime.observe(sid)["rest"]["pending_jobs"])
+            assert steer()["state"] == "picked_up"
+        assert not runtime.observe(sid)["rest"]["confirmed"]
+        Path(str(calls) + ".release").touch()
+        if prompt == "background-early":
+            _wait(lambda: runtime.observe(sid, prompt="stop")["receipt"]["state"] == "picked_up")
+        _wait(lambda: runtime.observe(sid)["rest"]["confirmed"])
+        observed = runtime.observe(sid)
+        assert observed["events"][-1]["event"]["text"] == "claude answer"
+        launches = [json.loads(line)["args"] for line in calls.read_text().splitlines()]
+        if prompt == "background-early":
+            assert len(launches) == 2 and "--resume" in launches[-1]
+        else:
+            assert len(launches) == 1
+    finally:
+        runtime.shutdown()
+
+
+def test_background_stream_exit_finishes_with_unknown_outcome(tmp_path, monkeypatch):
+    config, calls = _fixture(tmp_path)
+    monkeypatch.setenv("HEADLESS_CALLS", str(calls))
+    runtime = HeadlessRuntime(config)
+    sid = runtime.create("create", {})["session_id"]
+    runtime.submit("send", sid, "m", "r", "background-exit", {})
+    runtime.start({sid: sid})
+    try:
+        _wait(lambda: runtime.observe(sid)["rest"]["result_candidate"])
+        _wait(lambda: runtime.observe(sid)["rest"]["confirmed"])
+        observed = runtime.observe(sid)
+        assert observed["rest"]["pending_jobs"] == []
+        assert observed["events"][-2]["event"]["status"] == "interrupted"
+        assert observed["events"][-1]["event"]["error"]
+        assert "outcome is unknown" in observed["events"][-1]["event"]["text"]
+    finally:
+        runtime.shutdown()
+
+
+def test_background_notification_folded_into_foreground_result(tmp_path, monkeypatch):
+    config, calls = _fixture(tmp_path)
+    monkeypatch.setenv("HEADLESS_CALLS", str(calls))
+    runtime = HeadlessRuntime(config)
+    sid = runtime.create("create", {})["session_id"]
+    runtime.submit("send", sid, "m", "r", "background-folded", {})
+    runtime.start({sid: sid})
+    try:
+        _wait(lambda: runtime.observe(sid)["rest"]["result_candidate"])
+        _wait(lambda: runtime.observe(sid)["rest"]["confirmed"])
+        results = [
+            row["event"]
+            for row in runtime.observe(sid)["events"]
+            if row["event"]["kind"] == "result"
+        ]
+        assert [result["text"] for result in results] == ["Combined answer"]
+    finally:
+        runtime.shutdown()
+
+
+def test_job_finishing_during_callback_keeps_its_own_callback_pending(tmp_path, monkeypatch):
+    config, calls = _fixture(tmp_path)
+    monkeypatch.setenv("HEADLESS_CALLS", str(calls))
+    runtime = HeadlessRuntime(config)
+    sid = runtime.create("create", {})["session_id"]
+    runtime.submit("send", sid, "m", "r", "background-overlap", {})
+    runtime.start({sid: sid})
+    try:
+
+        def first_callback_observed():
+            events = runtime.observe(sid)["events"]
+            return events and events[-1]["event"].get("text") == "First callback"
+
+        _wait(first_callback_observed)
+        observed = runtime.observe(sid)
+        assert observed["rest"]["pending_jobs"] == []
+        assert not observed["rest"]["confirmed"]
+        Path(str(calls) + ".release").touch()
+        _wait(lambda: runtime.observe(sid)["rest"]["confirmed"])
+        assert runtime.observe(sid)["events"][-1]["event"]["text"] == "claude answer"
+    finally:
+        runtime.shutdown()
+
+
+@pytest.mark.parametrize(
+    "prior_state", ["legacy", "working", "working_unflushed", "working_callback", "question"]
+)
+def test_restart_reconciles_background_job_without_relaunch(tmp_path, monkeypatch, prior_state):
+    config, calls = _fixture(tmp_path)
+    monkeypatch.setenv("HEADLESS_CALLS", str(calls))
+    runtime = HeadlessRuntime(config)
+    sid = runtime.create("create", {})["session_id"]
+    native_id = runtime.describe(sid)["native_id"]
+    original = runtime.submit("send", sid, "m", "r", "background", {})
+    with runtime.store.connect() as db:
+        turn = db.execute("SELECT * FROM turns WHERE session_id=?", (sid,)).fetchone()
+        db.execute("UPDATE turns SET state='launching' WHERE id=?", (turn["id"],))
+    runtime._pickup(turn)
+    runtime._event(turn, "assistant", {"kind": "job_started", "job_id": "job"})
+    if prior_state == "question":
+        runtime._event(turn, "assistant", {"kind": "update", "parts": [{"kind": "question"}]})
+    runtime._event(turn, "assistant", {"kind": "result", "text": "Waiting"})
+    finished = prior_state in {"working_unflushed", "working_callback"}
+    if prior_state == "working_callback":
+        runtime._event(
+            turn, "assistant", {"kind": "job_finished", "job_id": "job", "status": "completed"}
+        )
+    with runtime.store.connect() as db:
+        db.execute(
+            "INSERT INTO jobs VALUES (?,'job',?)", (sid, "finished" if finished else "active")
+        )
+        if prior_state.startswith("working"):
+            db.execute("UPDATE sessions SET activity='working' WHERE id=?", (sid,))
+        else:
+            db.execute("UPDATE turns SET state='attention' WHERE id=?", (turn["id"],))
+            db.execute(
+                "UPDATE sessions SET activity='attention',attention_reason='question_or_job' WHERE id=?",
+                (sid,),
+            )
+    restarted = HeadlessRuntime(config)
+    restarted.start({sid: sid})
+    try:
+        assert not calls.exists()
+        assert restarted.submit("send", sid, "m", "r", "background", {}) == original
+        if prior_state == "question":
+            assert not restarted.observe(sid)["rest"]["confirmed"]
+            with pytest.raises(Unsupported, match="explicit recovery"):
+                restarted.submit("next", sid, "m2", "r2", "next", {})
+            return
+        assert restarted.observe(sid)["rest"]["confirmed"]
+        expected = "follow-up answer" if prior_state == "working_callback" else "outcome is unknown"
+        assert expected in restarted.observe(sid)["events"][-1]["event"]["text"]
+        resumed_after = restarted.observe(sid, view="cursor")["cursor"]
+        restarted.submit("next", sid, "m2", "r2", "stale-job", {"send_mode": "steer"})
+        _wait(lambda: restarted.observe(sid, prompt="stale-job")["receipt"]["state"] == "picked_up")
+        _wait(lambda: restarted.observe(sid)["rest"]["confirmed"])
+        assert all(
+            row["event"]["kind"] != "job_finished"
+            for row in restarted.observe(sid, after=resumed_after, view="events")["events"]
+        )
+        assert ["--resume", native_id] == json.loads(calls.read_text())["args"][-6:-4]
+    finally:
+        restarted.shutdown()
 
 
 def test_interrupt_cancels_queue_and_new_submit_resumes(tmp_path, monkeypatch):

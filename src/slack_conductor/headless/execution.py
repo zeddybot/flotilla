@@ -1,12 +1,15 @@
 """Queued turn dispatch, native process observation, and durable pickup."""
 
 import json
+import subprocess
 import threading
 
 from .claude_stream import ClaudeStream
 from .codex_server import CodexServer, text_input
 from .engines import codex_notification, codex_thread_options, command, decode
 from .process_host import launch, terminate
+
+TERMINAL_JOB_STATES = {"completed", "failed", "stopped", "cancelled", "canceled", "interrupted"}
 
 
 class Execution:
@@ -61,6 +64,10 @@ class Execution:
         channel = None
         result_seen = False
         result_error = False
+        result_after_notification = False
+        pending_jobs = set()
+        background_seen = False
+        draining = False
         needs_attention = False
         last_output = ""
         native_known = False
@@ -137,8 +144,29 @@ class Execution:
                                     turn,
                                 )
                 if event and native_known:
-                    if event["kind"] == "result":
+                    kind = event["kind"]
+                    job_id = event.get("job_id")
+                    if kind == "job_started" and isinstance(job_id, str) and job_id:
+                        with self.store.connect() as db:
+                            recorded = db.execute(
+                                "INSERT OR IGNORE INTO jobs VALUES (?,?,'active')", (sid, job_id)
+                            ).rowcount
+                        if not recorded:
+                            continue
+                        background_seen = True
+                        pending_jobs.add(job_id)
+                    elif kind == "job_finished":
+                        if not isinstance(job_id, str) or job_id not in pending_jobs:
+                            continue
+                        if event.get("status") in TERMINAL_JOB_STATES:
+                            self._finish_job(sid, job_id)
+                            pending_jobs.remove(job_id)
+                            result_after_notification = False
+                    final_result = kind == "result" and (not background_seen or needs_attention)
+                    if final_result:
                         with self._lock:
+                            if not is_codex:
+                                channel.finish()
                             self._reconcile_steers(sid)
                             self._active_turns.pop(sid, None)
                     if event.get("kind") == "update":
@@ -147,45 +175,83 @@ class Execution:
                                 last_output = part.get("text", "")
                     if event.get("kind") == "result" and not event.get("text") and last_output:
                         event["text"] = last_output
+                    if kind == "result":
+                        result_seen = True
+                        result_after_notification = True
+                        result_error = bool(event.get("error"))
+                        last_output = ""
+                        if not final_result:
+                            event["provisional"] = True
+                    if (
+                        not final_result
+                        and background_seen
+                        and result_seen
+                        and not pending_jobs
+                        and not draining
+                    ):
+                        # EOF lets Claude finish queued or folded-in callbacks and then exit.
+                        with self._lock:
+                            channel.close_input()
+                            self._draining.add(sid)
+                            self._active_turns.pop(sid, None)
+                        draining = True
+                    elif kind == "result" and not final_result:
+                        channel.continue_callbacks()
                     self._event(turn, "assistant", event)
                     if any(part.get("kind") == "question" for part in event.get("parts", [])):
                         needs_attention = True
-                    if event["kind"] == "result":
-                        result_seen = True
-                        result_error = bool(event.get("error"))
+                    if final_result:
                         break
-                    if event.get("kind") in {"job_started", "job_finished"} and event.get("job_id"):
-                        with self.store.connect() as db:
-                            db.execute(
-                                "INSERT INTO jobs VALUES (?,?,?) ON CONFLICT(session_id,id) "
-                                "DO UPDATE SET state=excluded.state",
-                                (
-                                    sid,
-                                    event["job_id"],
-                                    "active" if event["kind"] == "job_started" else "finished",
-                                ),
-                            )
-            if not native_known:
-                raise RuntimeError("Native session ID was not reported; launch needs attention")
-            if not result_seen:
-                raise RuntimeError("Headless process ended without a completion event")
-            with self.store.connect() as db:
-                pending_jobs = db.execute(
-                    "SELECT count(*) FROM jobs WHERE session_id=? AND state='active'", (sid,)
-                ).fetchone()[0]
-            if pending_jobs:
-                needs_attention = True
+            else:
+                if not native_known:
+                    raise RuntimeError("Native session ID was not reported; launch needs attention")
+                if not draining or pending_jobs or not result_after_notification:
+                    raise RuntimeError("Headless process ended without a completion event")
+                try:
+                    exit_code = process.wait(timeout=2)
+                except subprocess.TimeoutExpired as exc:
+                    raise RuntimeError(
+                        "Claude did not exit after closing its output stream"
+                    ) from exc
+                if exit_code:
+                    raise RuntimeError(
+                        "Claude exited unsuccessfully while finishing background work"
+                    )
             terminate(process)
+            self._end_jobs(turn, pending_jobs)
             self._finish(
                 turn,
                 "attention" if needs_attention else "failed" if result_error else "done",
                 attention=needs_attention,
-                reason="question_or_job" if needs_attention else None,
+                reason="question" if needs_attention else None,
             )
         except (OSError, RuntimeError, ValueError) as exc:
             # A launch may have reached the engine before the worker failed.
-            self._event(turn, "assistant", {"kind": "result", "error": True, "text": str(exc)})
-            self._finish(turn, "attention", attention=True, reason="ambiguous")
+            with self._lock:
+                self._active_turns.pop(sid, None)
+                if channel and not is_codex:
+                    channel.finish()
+                self._reconcile_steers(sid)
+            if process is not None:
+                terminate(process)
+            self._end_jobs(turn, pending_jobs)
+            with self._lock, self.store.connect() as db:
+                cancelled = db.execute(
+                    "SELECT 1 FROM turns WHERE id=? AND state='cancelled'", (turn["id"],)
+                ).fetchone()
+            if not cancelled:
+                detail = str(exc)
+                if result_seen:
+                    detail = (
+                        "The worker lost contact with Claude's background work. Its outcome is unknown."
+                        if pending_jobs
+                        else "The worker lost contact with Claude before it returned the follow-up answer."
+                    )
+                self._event(turn, "assistant", {"kind": "result", "error": True, "text": detail})
+                if result_seen and not needs_attention:
+                    self._finish(turn, "failed", attention=False)
+                else:
+                    self._finish(turn, "attention", attention=True, reason="ambiguous")
         finally:
             try:
                 if process is not None:
@@ -199,7 +265,31 @@ class Execution:
                     self._reconcile_steers(sid)
                     self._processes.pop(sid, None)
                     self._active_turns.pop(sid, None)
+                    self._draining.discard(sid)
                 self._wake.set()
+
+    def _finish_job(self, sid, job_id):
+        with self.store.connect() as db:
+            db.execute(
+                "UPDATE jobs SET state='finished' WHERE session_id=? AND id=?", (sid, job_id)
+            )
+
+    def _end_jobs(self, turn, jobs):
+        for job_id in sorted(jobs):
+            self._record_interrupted_job(turn, job_id)
+            self._finish_job(turn["session_id"], job_id)
+
+    def _record_interrupted_job(self, turn, job_id):
+        self._event(
+            turn,
+            "assistant",
+            {
+                "kind": "job_finished",
+                "job_id": job_id,
+                "status": "interrupted",
+                "outcome_unknown": True,
+            },
+        )
 
     def _codex_lines(self, codex, session, turn):
         codex.initialize()
@@ -274,12 +364,13 @@ class Execution:
     def _finish(self, turn, state, *, attention, reason=None):
         sid = turn["session_id"]
         with self.store.connect() as db:
-            db.execute(
+            settled = db.execute(
                 "UPDATE turns SET state=? WHERE id=? AND state NOT IN ('attention','cancelled')",
                 (state, turn["id"]),
-            )
-            db.execute(
-                "UPDATE sessions SET activity=?,attention_reason=? WHERE id=? AND state='active' "
-                "AND activity!='attention'",
-                ("attention" if attention else "idle", reason, sid),
-            )
+            ).rowcount
+            if settled:
+                db.execute(
+                    "UPDATE sessions SET activity=?,attention_reason=? WHERE id=? AND state='active' "
+                    "AND activity!='attention'",
+                    ("attention" if attention else "idle", reason, sid),
+                )
