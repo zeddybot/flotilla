@@ -293,6 +293,11 @@ def test_a_stalled_machine_does_not_spend_the_grace_period(monkeypatch):
     assert attempts[0] == 28
 
 
+def test_minute_spaced_background_heartbeats_do_not_open_devtools(monkeypatch):
+    attempts = attachment_attempts(monkeypatch, lambda t: t % 62 < 5, until=250)
+    assert attempts == []
+
+
 def test_frontend_that_never_served_attaches_without_waiting(monkeypatch):
     assert attachment_attempts(monkeypatch, lambda t: False)[0] == 0
 
@@ -353,10 +358,58 @@ def test_bootstrap_goes_ahead_when_the_foreground_app_is_unknown(monkeypatch, ca
     )
     attached = []
     monkeypatch.setattr(attachment, "_attach", lambda *a: attached.append(a))
-    attachment.attach(object())
+    attachment.attach(SimpleNamespace(online=lambda: False))
     assert len(attached) == 1
     assert activated == []
     assert "Conductor will stay in front" in caplog.text
+
+
+def test_resumed_heartbeat_skips_ui_after_focus_probe(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from slack_conductor.conductor import attachment
+
+    module = inspector_module(monkeypatch)
+    monkeypatch.setitem(sys.modules, "slack_conductor.conductor.inspector", module)
+    monkeypatch.setattr(module.Inspector, "focused_pid", lambda: 9)
+    monkeypatch.setattr(attachment, "_attach", lambda *args: pytest.fail("unexpected UI access"))
+    attachment.attach(SimpleNamespace(online=lambda: True))
+
+
+@pytest.mark.parametrize("already_open", [False, True])
+def test_missing_console_prompt_closes_only_the_sidebar_we_opened(monkeypatch, already_open):
+    import sys
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    from slack_conductor.conductor import attachment
+
+    module = inspector_module(monkeypatch)
+    monkeypatch.setitem(sys.modules, "slack_conductor.conductor.inspector", module)
+    monkeypatch.setattr(module.Inspector, "activate", lambda pid: None)
+    monkeypatch.setattr(module, "attr", lambda node, key: node.get(key))
+    monkeypatch.setattr(attachment.time, "sleep", lambda seconds: None)
+    menu = {"AXTitle": "Open Debug Tools"}
+    actions = []
+
+    def wait(predicate, message, timeout):
+        raise RuntimeError(message)
+
+    ax = SimpleNamespace(
+        reachable=nullcontext,
+        pid=1,
+        app={"AXMenuBar": menu},
+        console_prompt=lambda: None,
+        devtools=lambda: object() if already_open else None,
+        press=lambda _: actions.append("open"),
+        console_tab=lambda: None,
+        wait=wait,
+        close_console=lambda: actions.append("close"),
+    )
+    with pytest.raises(RuntimeError, match="Inspector console unavailable"):
+        attachment._attach(SimpleNamespace(online=lambda: False), ax)
+    assert actions == ([] if already_open else ["open", "close"])
 
 
 def test_frontmost_probe_timeout_reads_as_unknown(monkeypatch):
@@ -391,20 +444,29 @@ def test_failed_bootstrap_is_retried_without_waiting_for_conductor_to_be_selecte
     assert attempts == [0, 60, 180, 480, 780]
 
 
-def test_selecting_conductor_or_a_locked_screen_retries_every_minute(monkeypatch):
+def test_selecting_conductor_retries_every_minute(monkeypatch):
     selected = attachment_attempts(
         monkeypatch, lambda t: False, focused=lambda t: 1 if t >= 200 else 2, fails=True, until=330
     )
     assert selected == [0, 60, 180, 240, 300]
-    locked = attachment_attempts(
+
+
+def test_locked_screen_defers_ui_until_unlock_and_allows_heartbeat_recovery(monkeypatch):
+    def locked(t):
+        return t < 135
+
+    assert attachment_attempts(
         monkeypatch,
         lambda t: False,
-        unattended=lambda t: True,
-        focused=lambda t: 594,
-        fails=True,
-        until=200,
+        unattended=locked,
+        until=136,
+    ) == [135]
+    assert (
+        attachment_attempts(
+            monkeypatch, lambda t: t >= 150, unattended=locked, inherited=True, until=250
+        )
+        == []
     )
-    assert locked == [0, 60, 120, 180]
 
 
 def test_repeated_stalls_cannot_postpone_the_bootstrap_forever(monkeypatch):
