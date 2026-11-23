@@ -16,6 +16,7 @@ from .notifications import Notifications
 from .poller import Poller
 from .presentation import render
 from .protocol import parse, prompt_header
+from .remote_peer import SubmissionRejected
 from .slack_io import SlackIO
 
 log = logging.getLogger(__name__)
@@ -352,6 +353,9 @@ class Bridge:
                     status_id, note=note, latest="starting agent" if picked else "queued"
                 )
             self.store.execute("UPDATE events SET state='done' WHERE key=?", (key,))
+        except SubmissionRejected as exc:
+            self.store.update(status_id, note=exc.note_prefix + str(exc))
+            self.store.execute("UPDATE events SET state='failed' WHERE key=?", (key,))
         except Unconfirmed:
             self.store.execute(
                 "UPDATE events SET state='pending',retry_at=? WHERE key=?", (time.time() + 5, key)

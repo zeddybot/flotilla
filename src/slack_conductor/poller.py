@@ -19,10 +19,16 @@ class Poller:
         self.uploads = Uploads(store, slack, clock=clock)
         self.notifications = notifications
 
-    def finish(self, status, text, phase="done", detail=""):
+    def finish(self, status, text, phase="done", detail="", *, clear_note=False):
         turn = Turn.load(status["tracking"])
         turn.phase, turn.detail = phase, detail
-        self.store.update(status["id"], state="delivering", result=text, tracking=turn.dump())
+        self.store.update(
+            status["id"],
+            state="delivering",
+            result=text,
+            tracking=turn.dump(),
+            note="" if clear_note else status["note"],
+        )
         self.deliver(self.store.status(status["id"]))
 
     def deliver(self, status):
@@ -126,6 +132,17 @@ class Poller:
             try:
                 if status["state"] == "waiting":
                     sid, prompt = status["session_id"], status["prompt"]
+                    submission_rejection = getattr(self.db, "submission_rejection", None)
+                    if submission_rejection and (
+                        reason := submission_rejection(sid, prompt, status["note"])
+                    ):
+                        self.finish(
+                            status,
+                            f"Your message was not sent. {reason}",
+                            "attention",
+                            clear_note=True,
+                        )
+                        continue
                     if hasattr(self.db, "receipt"):
                         receipt = self.db.receipt(sid, prompt)
                         state = receipt["state"]

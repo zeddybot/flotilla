@@ -15,12 +15,25 @@ from .runtime_observations import RuntimeObservations
 
 log = logging.getLogger(__name__)
 VERSION = 2
+LEGACY_STEERING_REJECTION = "The headless turn is not ready for steering"
+
+
+class SubmissionRejected(RuntimeError):
+    """The client definitively rejected the prompt before native pickup."""
+
+    note_prefix = "submission rejected: "
+
+
+def submission_id(sid, prompt):
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, sid + ":" + prompt))
 
 
 def unpack(response):
     if response.get("retry"):
         raise Unconfirmed("Mac client is reconnecting; your message is saved")
     if "error" in response:
+        if response.get("error_type") == "submission_rejected":
+            raise SubmissionRejected(response["error"])
         raise RuntimeError(response["error"])
     return response.get("value")
 
@@ -175,7 +188,7 @@ class RemotePeer:
     def send(self, wid, sid, prompt, options):
         with self.lock:
             self.bindings[sid] = wid
-        message_id = str(uuid.uuid5(uuid.NAMESPACE_URL, sid + ":" + prompt))
+        message_id = submission_id(sid, prompt)
         command = "runtime:submit:" + message_id
         value = self.rpc(
             "runtime.submit",
@@ -190,6 +203,33 @@ class RemotePeer:
             key=command,
         )
         return value.get("warning") or ""
+
+    def submission_rejection(self, sid, prompt, note):
+        typed = note.startswith(SubmissionRejected.note_prefix)
+        legacy = self.backend == "headless" and note == f"error: {LEGACY_STEERING_REJECTION}"
+        if not (typed or legacy):
+            return None
+        saved = self.receipts.saved("runtime:submit:" + submission_id(sid, prompt))
+        if saved is None:
+            return None
+        request, response = saved
+        args = request["args"]
+        if (
+            request["method"] == "runtime.submit"
+            and args["session_id"] == sid
+            and args["prompt"] == prompt
+            and not response.get("retry")
+            and "value" not in response
+        ):
+            if typed and response.get("error_type") == "submission_rejected":
+                return response["error"]
+            if (
+                legacy
+                and args["options"].get("send_mode") == "steer"
+                and response.get("error") == LEGACY_STEERING_REJECTION
+            ):
+                return LEGACY_STEERING_REJECTION
+        return None
 
     def archive(self, wid, sid):
         command = "runtime:close:" + wid
