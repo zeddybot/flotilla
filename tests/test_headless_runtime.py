@@ -30,7 +30,18 @@ if engine == 'claude':
     def replay(message):
         print(json.dumps({**message, 'isReplay': True, 'session_id': identity}), flush=True)
 
+    if prompt == 'resume-with-stopped-job':
+        assert '--resume' in args
+        for event in (
+            {'type':'system','subtype':'task_notification','task_id':'old-job','status':'stopped'},
+            {'type':'system','subtype':'init'},
+            {'type':'result','subtype':'success','is_error':False,'origin':{'kind':'task-notification'},
+             'result':''},
+        ):
+            print(json.dumps({**event, 'session_id':identity}), flush=True)
     print(json.dumps({'type':'system','subtype':'init','session_id':identity}), flush=True)
+    if prompt == 'no-ack':
+        sys.exit(1)
     replay(first_input)
     if prompt == 'stale-job':
         print(json.dumps({'type': 'system', 'subtype': 'task_notification', 'status': 'completed',
@@ -238,6 +249,32 @@ def test_create_queue_resume_and_archive(tmp_path, monkeypatch, engine):
     runtime.shutdown()
 
 
+def test_resumed_turn_only_publishes_its_own_events(tmp_path, monkeypatch):
+    config, calls = _fixture(tmp_path)
+    monkeypatch.setenv("HEADLESS_CALLS", str(calls))
+    runtime = HeadlessRuntime(config)
+    sid = runtime.create("create", {})["session_id"]
+    runtime.start({})
+    try:
+        for message in ("original", "resume-with-stopped-job"):
+            runtime.submit(f"send:{message}", sid, message, message, message, {})
+            _wait(
+                lambda prompt=message: runtime.observe(sid, view="receipt", prompt=prompt)[
+                    "receipt"
+                ]["seq"]
+            )
+            _wait(lambda: runtime.observe(sid, view="snapshot")["rest"]["confirmed"])
+        rows = [
+            row["event"]
+            for row in runtime.observe(sid, view="events")["events"]
+            if row["message_id"] == "resume-with-stopped-job"
+        ]
+        assert [e["kind"] for e in rows] == ["input", "started", "update", "result"]
+        assert rows[-1]["text"] == "claude answer"
+    finally:
+        runtime.shutdown()
+
+
 def test_ambiguous_restart_blocks_replay_and_steering(tmp_path, monkeypatch):
     config, calls = _fixture(tmp_path)
     monkeypatch.setenv("HEADLESS_CALLS", str(calls))
@@ -270,7 +307,31 @@ def test_missing_completion_requires_attention(tmp_path, monkeypatch):
     runtime.start({sid: sid})
     _wait(lambda: runtime.describe(sid)["activity"] == "attention")
     assert runtime.observe(sid, view="snapshot")["rest"]["confirmed"] is False
+    assert (
+        runtime.observe(sid, view="receipt", prompt="no-result")["receipt"]["state"] == "picked_up"
+    )
     runtime.shutdown()
+
+
+def test_missing_launch_acknowledgement_reports_unconfirmed_receipt(tmp_path, monkeypatch):
+    config, calls = _fixture(tmp_path)
+    monkeypatch.setenv("HEADLESS_CALLS", str(calls))
+    runtime = HeadlessRuntime(config)
+    sid = runtime.create("create", {})["session_id"]
+    runtime.submit("send", sid, "m", "r", "no-ack", {})
+    runtime.submit("next", sid, "m2", "r2", "next", {})
+    runtime.start({sid: sid})
+    try:
+        _wait(lambda: runtime.describe(sid)["activity"] == "attention")
+        assert runtime.observe(sid, view="receipt", prompt="no-ack")["receipt"] == {
+            "state": "launch_unconfirmed",
+            "seq": None,
+            "segment_id": None,
+        }
+        assert runtime.observe(sid, view="receipt", prompt="next")["receipt"]["state"] == "queued"
+        assert len(calls.read_text().splitlines()) == 1
+    finally:
+        runtime.shutdown()
 
 
 @pytest.mark.parametrize("prompt", ["background", "background-early"])

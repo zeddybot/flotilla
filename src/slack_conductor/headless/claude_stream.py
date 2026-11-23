@@ -12,7 +12,7 @@ from .process_host import Rejected, write_json_line
 
 
 class ClaudeStream:
-    def __init__(self, process):
+    def __init__(self, process, *, resume_session=None):
         self.process = process
         self._stdin = process.stdin.fileno()
         os.set_blocking(self._stdin, False)
@@ -27,6 +27,7 @@ class ClaudeStream:
         self._input_closed = False
         self._write_failed = False
         self._session_id = None
+        self._resume_session = resume_session
         self._reader = threading.Thread(target=self._read, daemon=True)
         self._reader.start()
 
@@ -92,6 +93,7 @@ class ClaudeStream:
             self.events.put(error)
 
     def _read(self):
+        resume_init = None
         try:
             for line in iter(lambda: self.process.stdout.readline(2_000_001), ""):
                 if len(line) > 2_000_000:
@@ -102,11 +104,25 @@ class ClaudeStream:
                     continue
                 if not isinstance(source, dict):
                     continue
-                if not (
+                top_level = not (
                     source.get("parent_tool_use_id")
                     or (source.get("conductor_sdk_metadata") or {}).get("isForeignResult")
-                ):
+                )
+                if top_level:
                     self._observe(source)
+                if self._resume_session and not self._started:
+                    # A resumed CLI can process a previous job before reading our
+                    # input. Publish only the init that precedes our exact replay.
+                    if (
+                        top_level
+                        and source.get("type") == "system"
+                        and source.get("subtype") == "init"
+                    ):
+                        resume_init = line
+                    continue
+                if resume_init is not None:
+                    self.events.put(resume_init)
+                    resume_init = None
                 self.events.put(line)
                 # Read no more native acknowledgements until execution decides
                 # whether this result is provisional or closes the turn.
@@ -128,6 +144,17 @@ class ClaudeStream:
         if kind == "result":
             with self._lock:
                 if not self._started:
+                    if (
+                        self._resume_session is not None
+                        and self._resume_session == session_id == self._session_id
+                        and isinstance(source.get("origin"), dict)
+                        and source["origin"].get("kind") == "task-notification"
+                        and source.get("subtype") == "success"
+                        and source.get("is_error") is False
+                        and not source.get("user_message_uuid")
+                        and not source.get("user_message_uuids")
+                    ):
+                        return
                     raise RuntimeError("Claude turn ended before acknowledging the initial input")
                 if session_id != self._session_id:
                     raise RuntimeError("Claude completed an unexpected session")
@@ -142,6 +169,7 @@ class ClaudeStream:
                 if (
                     not isinstance(session_id, str)
                     or not session_id
+                    or self._resume_session not in (None, session_id)
                     or self._session_id not in (None, session_id)
                 ):
                     raise RuntimeError("Claude reported an unexpected session identity")
