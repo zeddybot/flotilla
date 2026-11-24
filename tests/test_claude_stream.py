@@ -11,7 +11,7 @@ from slack_conductor.headless.process_host import Rejected
 
 
 @pytest.fixture()
-def channel(request):
+def channel(request, tmp_path):
     engine_in, client_out = os.pipe()
     client_in, engine_out = os.pipe()
     with (
@@ -20,9 +20,11 @@ def channel(request):
         os.fdopen(client_in) as client_stdout,
         os.fdopen(client_out, "w") as client_stdin,
     ):
+        mode = getattr(request, "param", None)
         stream = ClaudeStream(
             SimpleNamespace(stdin=client_stdin, stdout=client_stdout),
-            resume_session=getattr(request, "param", None),
+            resume_session=None if mode == "fresh" else mode,
+            fresh_transcript=tmp_path / "session.jsonl" if mode == "fresh" else None,
         )
         try:
             yield stream, inputs, outputs
@@ -113,6 +115,46 @@ def test_disconnect_unblocks_pending_initial_input(channel):
         outputs.close()
         with pytest.raises(RuntimeError, match="disconnected"):
             initializing.result(timeout=2)
+
+
+@pytest.mark.parametrize("channel", ["fresh"], indirect=True)
+@pytest.mark.parametrize("outcome", ["deadline", "result", "unmatched"])
+def test_fresh_input_requires_exact_persisted_row_without_stream_replay(channel, tmp_path, outcome):
+    stream, inputs, outputs = channel
+    path = tmp_path / "session.jsonl"
+    with ThreadPoolExecutor() as pool:
+        initializing = pool.submit(
+            stream.start, "first prompt", "input-id", 2 if outcome == "result" else 0.5
+        )
+        request = receive(inputs)
+        send(outputs, "system", subtype="init")
+        entry = {
+            "type": "user",
+            "uuid": request["uuid"],
+            "sessionId": "session",
+            "isSidechain": False,
+            "parentUuid": None,
+        }
+        with path.open("w") as transcript:
+            for fields in (
+                {"sessionId": "other"},
+                {"uuid": "other"},
+                {"isSidechain": True},
+                {"parentUuid": "other"},
+            ):
+                transcript.write(json.dumps({**entry, **fields}) + "\n")
+            if outcome != "unmatched":
+                transcript.write(json.dumps(entry) + "\n")
+        if outcome == "unmatched":
+            with pytest.raises(RuntimeError, match="did not acknowledge"):
+                initializing.result(timeout=2)
+            return
+        if outcome == "result":
+            send(outputs, "result", result="completed")
+        initializing.result(timeout=2)
+        if outcome == "deadline":
+            send(outputs, "result", result="completed")
+        assert finish_result(stream, stream.lines()) == "completed"
 
 
 @pytest.mark.parametrize("channel", ["session"], indirect=True)

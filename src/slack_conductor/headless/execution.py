@@ -1,8 +1,11 @@
 """Queued turn dispatch, native process observation, and durable pickup."""
 
 import json
+import os
+import re
 import subprocess
 import threading
+from pathlib import Path
 
 from .claude_stream import ClaudeStream
 from .codex_server import CodexServer, text_input
@@ -92,13 +95,24 @@ class Execution:
                     spec=json.loads(session["spec"]),
                 )
                 is_codex = session["engine"] == "codex"
+                fresh_transcript = None
+                if not is_codex and first and session["native_id"]:
+                    config_dir = Path(
+                        os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude"
+                    )
+                    project = re.sub(r"[^a-zA-Z0-9-]", "-", session["path"])
+                    transcript = config_dir / "projects" / project / f"{session['native_id']}.jsonl"
+                    if not transcript.exists():
+                        fresh_transcript = transcript
                 process = launch(args, session["path"], duplex=True)
                 self._processes[sid] = process
                 if is_codex:
                     channel = CodexServer(process)
                 else:
                     channel = ClaudeStream(
-                        process, resume_session=None if first else session["native_id"]
+                        process,
+                        resume_session=None if first else session["native_id"],
+                        fresh_transcript=fresh_transcript,
                     )
             if is_codex:
                 lines = self._codex_lines(channel, session, turn)
