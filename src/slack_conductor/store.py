@@ -125,6 +125,71 @@ class Store:
         )
         return routes[0] if routes else None
 
+    def list_sessions(self, team_id, owner_id, client_id, destination):
+        """List the current Slack bindings and their recorded activity for one profile."""
+        with self.connect() as conn:
+            schema = "main"
+            if destination.path != self.path:
+                conn.execute("ATTACH DATABASE ? AS endpoint", (str(destination.path),))
+                schema = "endpoint"
+            # The opening prompt identifies the session even after a steer supersedes it.
+            # A queued follow-up should not hide a turn that is already active.
+            rows = conn.execute(
+                f"""
+                WITH owned AS (
+                    SELECT t.* FROM slack_routes r
+                    JOIN {schema}.threads t USING (channel, thread_ts)
+                    WHERE r.team_id=? AND r.owner_id=? AND r.client_id=? AND t.state!='archived'
+                ), ranked AS (
+                    SELECT t.channel, t.thread_ts, t.session_id, t.workspace_id, t.options,
+                        first_value(s.prompt) OVER (thread ORDER BY s.id) AS prompt,
+                        first_value(s.event_key) OVER (thread ORDER BY s.id) AS event_key,
+                        CASE
+                            WHEN s.state IN ('active', 'delivering', 'complete')
+                                AND json_extract(s.tracking, '$.phase')='attention' THEN 'attention'
+                            WHEN s.state='failed' OR (s.state IN ('delivering', 'complete')
+                                AND json_extract(s.tracking, '$.phase')='failed') THEN 'failed'
+                            WHEN s.state='active' THEN 'running'
+                            WHEN s.state='waiting' AND s.latest='queued' THEN 'queued'
+                            WHEN s.state='waiting' THEN 'starting'
+                            WHEN s.state='delivering' THEN 'delivering'
+                            ELSE 'idle'
+                        END AS status,
+                        coalesce(max(s.created) OVER thread,
+                            cast(t.thread_ts AS REAL)) AS updated_at,
+                        row_number() OVER (thread ORDER BY
+                            CASE s.state
+                                WHEN 'active' THEN 1
+                                WHEN 'waiting' THEN 2
+                                WHEN 'delivering' THEN 3
+                                WHEN 'superseded' THEN 5
+                                ELSE 4
+                            END, s.id DESC) AS rank
+                    FROM owned t
+                    LEFT JOIN {schema}.statuses s ON s.channel=t.channel AND s.thread_ts=t.thread_ts
+                        AND s.session_id=t.session_id AND s.workspace_id=t.workspace_id
+                        AND s.prompt!=''
+                    WINDOW thread AS (PARTITION BY t.channel, t.thread_ts)
+                )
+                SELECT channel, thread_ts, session_id, workspace_id, options, prompt, event_key, status, updated_at
+                FROM ranked WHERE rank=1 ORDER BY updated_at DESC, thread_ts DESC, channel
+                """,
+                (team_id, owner_id, client_id),
+            )
+            sessions = []
+            for row in rows:
+                session = dict(row)
+                options = json.loads(session.pop("options"))
+                prompt = session["prompt"] or ""
+                permalink = ""
+                if prompt.startswith("[slack] channel="):
+                    header = prompt.partition("\n")[0]
+                    permalink = header.partition(" permalink=")[2].partition(" ")[0]
+                    prompt = prompt.partition("\n\n")[2]
+                session.update(prompt=prompt, permalink=permalink, model=options.get("model") or "")
+                sessions.append(session)
+            return sessions
+
     def legacy_default(self, team_id, fallback):
         rows = self.rows("SELECT client_id FROM slack_legacy_defaults WHERE team_id=?", (team_id,))
         return rows[0]["client_id"] if rows else fallback
@@ -211,7 +276,8 @@ class Store:
 
     def thread_state(self, status, state):
         self.execute(
-            "UPDATE threads SET state=? WHERE channel=? AND thread_ts=? AND session_id=?",
+            "UPDATE threads SET state=? WHERE channel=? AND thread_ts=? AND session_id=? "
+            "AND state!='archived'",
             (state, status["channel"], status["thread_ts"], status["session_id"]),
         )
 

@@ -13,6 +13,8 @@ def test_only_open_thread_bindings_are_restored(tmp_path):
     for channel, session in [("C1", "s1"), ("C2", "s2")]:
         store.bind(channel, "1", {"id": "w" + session, "active_session_id": session}, {})
     store.thread_state(store.thread("C2", "1"), "archived")
+    # A late delivery from a closing turn must not reopen the binding.
+    store.thread_state(store.thread("C2", "1"), "idle")
     assert Store(store.path).session_bindings() == {"s1": "ws1"}
 
 
