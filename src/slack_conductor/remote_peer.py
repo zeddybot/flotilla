@@ -165,6 +165,15 @@ class RemotePeer:
                 with self.lock:
                     self.pending.pop(request_id, None)
 
+    def session_inventory(self):
+        if not self.ready():
+            return None
+        try:
+            return self.rpc("runtime.sessions", {})
+        except RuntimeError as exc:
+            log.info("Session inventory unavailable (%s)", type(exc).__name__)
+            return None
+
     def probe(self):
         return self.rpc("runtime.probe", {})
 

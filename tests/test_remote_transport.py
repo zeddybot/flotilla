@@ -15,6 +15,7 @@ from slack_conductor.conductor.journal import Unconfirmed
 from slack_conductor.config import Config
 from slack_conductor.remote import RemoteConductor
 from slack_conductor.remote_client import Dispatcher, run_client
+from slack_conductor.remote_peer import RemotePeer
 
 TOKEN = "secret-token-with-at-least-thirty-two-chars"
 
@@ -159,6 +160,28 @@ def test_observations_are_bound_and_sql_is_not_exposed(remote_pair):
     with pytest.raises(RuntimeError, match="not owned"):
         server.db.session("unbound")
     assert native.created == 0
+
+
+def test_session_inventory_distinguishes_empty_runtime_from_unavailable_peer(tmp_path, monkeypatch):
+    peer = RemotePeer(Config(state_dir=tmp_path))
+    calls = []
+
+    def rpc(method, args, **kwargs):
+        calls.append((method, args, kwargs.get("key")))
+        return []
+
+    monkeypatch.setattr(peer, "rpc", rpc)
+    assert peer.session_inventory() is None
+    assert calls == []
+    monkeypatch.setattr(peer, "ready", lambda: True)
+    assert peer.session_inventory() == []
+    assert calls == [("runtime.sessions", {}, None)]
+
+    def reconnecting(*args, **kwargs):
+        raise Unconfirmed("Runtime is reconnecting")
+
+    monkeypatch.setattr(peer, "rpc", reconnecting)
+    assert peer.session_inventory() is None
 
 
 def test_durable_responses_survive_receipt_reopen(remote_pair):

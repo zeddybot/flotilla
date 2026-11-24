@@ -13,6 +13,7 @@ from slack_conductor.config import Config
 from slack_conductor.headless.runtime import HeadlessRuntime
 from slack_conductor.pairing import PairingStore
 from slack_conductor.protocol import parse
+from slack_conductor.remote_journal import Receipts
 from slack_conductor.slack_app import Bridge
 from slack_conductor.slack_routing import Routing
 from slack_conductor.store import Store
@@ -395,6 +396,238 @@ def test_legacy_mac_is_default_and_existing_queue_stays_after_switch(tmp_path):
     assert bridge.store.next_event()["key"] == "T1:C1:1"
     router.receive(event("U1", "7", "default mac", direct=True))
     assert reboot.resolve("U1", None) == router.legacy_id
+
+
+def test_dm_sessions_lists_owned_current_sessions_across_profiles(tmp_path, monkeypatch):
+    bridge, endpoints = setup(tmp_path)
+    daytona = register(bridge, endpoints, "U1", "1" * 32)
+    register(bridge, endpoints, "U2", "2" * 32, name="private")
+
+    def permalink(channel, ts):
+        return f"https://workspace.slack.com/archives/{channel}/p{ts.replace('.', '')}"
+
+    def slack_call(method, *, channel, message_ts):
+        assert method == "chat_getPermalink"
+        return {"permalink": permalink(channel, message_ts)}
+
+    bridge.slack.call = slack_call
+
+    def create(key, options):
+        ts = key.rsplit(":", 1)[-1]
+        return {"id": f"w-{ts}", "active_session_id": f"s-{ts}"}
+
+    for runtime in [bridge.conductor, *endpoints.values()]:
+        runtime.create_session = create
+
+    # This prompt predates the team-scoped routing table.
+    legacy = event("U1", "1.000001", "<@B> Legacy prompt")
+    assert bridge.receive(legacy)
+    legacy_envelope = bridge.store.next_event()
+    bridge.process(legacy_envelope)
+    bridge.store.thread_state(bridge.store.thread("C1", "1.000001"), "idle")
+    bridge.store.execute(
+        "UPDATE statuses SET state='complete' WHERE event_key=?", (legacy_envelope["key"],)
+    )
+
+    router = Routing(bridge)
+
+    def process(user, ts, text, *, thread=None):
+        assert router.receive(event(user, ts, f"<@B> {text}", thread=thread))
+        route = bridge.store.route("T1", "C1", thread or ts)
+        client = router.to_bridge(route["client_id"])
+        client.process(client.store.next_event())
+
+    process("U1", "2.000001", "[profile:daytona] Previous generation")
+    process("U1", "2.000002", "[new] [opus] First current prompt & <unsafe>", thread="2.000001")
+    process("U1", "2.000003", "Active follow-up", thread="2.000001")
+    process("U1", "2.000004", "Queued follow-up", thread="2.000001")
+    active_store = router.to_bridge(daytona).store
+    active_store.execute("UPDATE statuses SET state='complete' WHERE event_key='T1:C1:2.000002'")
+    active_store.execute("UPDATE statuses SET state='active' WHERE event_key='T1:C1:2.000003'")
+    process("U1", "3.000001", "[profile:daytona] Closed prompt")
+    process("U1", "3.000002", "[close]", thread="3.000001")
+    process("U2", "4.000001", "Someone else's prompt")
+    process("U1", "4.000002", "Collaborator follow-up", thread="4.000001")
+
+    def fail_runtime(*args, **kwargs):
+        pytest.fail("Session listing called the runtime")
+
+    # Simulate a disconnected runtime with bridge state still on the server.
+    for runtime in [bridge.conductor, *endpoints.values()]:
+        for method in ("probe", "create_session", "validate", "send", "rpc", "archive"):
+            monkeypatch.setattr(runtime, method, fail_runtime)
+    bridge.slack.posts.clear()
+    assert not router.receive(event("U1", "5.000001", "sessions", direct=True))
+
+    ((destination, thread, text, _),) = bridge.slack.posts
+    assert (destination, thread) == ("U1", None)
+    assert text.count(permalink("C1", "2.000001")) == 1
+    assert text.count(permalink("C1", "1.000001")) == 1
+    assert bridge.config.model in text and bridge.config.models["opus"] in text
+    assert "daytona" in text and "mac" in text
+    assert "First current prompt &amp; &lt;unsafe&gt;" in text
+    assert "Legacy prompt" in text
+    assert "idle" in text.lower() and "running" in text.lower()
+    assert "offline" in text.lower()
+    for hidden in (
+        "Previous generation",
+        "Active follow-up",
+        "Queued follow-up",
+        "Closed prompt",
+        "Someone else's prompt",
+        "Collaborator follow-up",
+        permalink("C1", "4.000001"),
+    ):
+        assert hidden not in text
+    assert bridge.store.route("T1", "D1", "5.000001") is None
+    assert all(client.store.next_event() is None for client in router.bridges.values())
+
+
+def test_dm_sessions_empty_inbox_does_not_create_a_route(tmp_path):
+    bridge, _ = setup(tmp_path)
+    router = Routing(bridge)
+    assert not router.receive(event("U1", "1.000000", "sessions", direct=True), source="history")
+    assert bridge.slack.posts == []
+    assert bridge.store.route("T1", "D1", "1.000000") is None
+    assert not router.receive(event("U2", "1.000001", "sessions", direct=True))
+
+    ((destination, thread, text, _),) = bridge.slack.posts
+    assert (destination, thread) == ("U2", None)
+    assert text == "You have no active Slack sessions."
+    assert bridge.store.route("T1", "D1", "1.000001") is None
+    assert bridge.store.next_event() is None
+
+
+def test_dm_sessions_uses_saved_headless_default_model_without_runtime(tmp_path, monkeypatch):
+    bridge, endpoints = setup(tmp_path)
+    bridge.slack.call = lambda *args, **kwargs: {
+        "permalink": "https://workspace.slack.com/archives/C1/p1000001"
+    }
+    client_id = register(bridge, endpoints, "U2", "1" * 32, backend="headless")
+    peer = endpoints[client_id]
+    peer.receipts = Receipts(peer.config.state_dir / "remote.sqlite")
+
+    def create(key, options):
+        assert options["model"] == ""
+        command = f"runtime:create:{key}"
+        peer.receipts.begin(command, "runtime.create", {"command_id": key, "spec": options})
+        peer.receipts.finish(
+            command,
+            {"value": {"workspace_id": "w", "session_id": "s", "spec": {"model": "sonnet"}}},
+        )
+        return {"id": "w", "active_session_id": "s"}
+
+    peer.create_session = create
+    router = Routing(bridge)
+    assert router.receive(event("U2", "1.000001", "<@B> Headless prompt"))
+    target = router.to_bridge(client_id)
+    target.process(target.store.next_event())
+    assert peer.sent
+
+    def fail_runtime(*args, **kwargs):
+        pytest.fail("Headless sessions should use saved state while the client is offline")
+
+    monkeypatch.setattr(peer, "rpc", fail_runtime)
+    monkeypatch.setattr(peer, "probe", fail_runtime)
+    bridge.slack.posts.clear()
+    assert not router.receive(event("U2", "1.000002", "sessions", direct=True))
+    ((destination, thread, text, _),) = bridge.slack.posts
+    assert (destination, thread) == ("U2", None)
+    assert "sonnet" in text and "Headless prompt" in text
+
+
+@pytest.mark.parametrize("adapter", ["conductor", "headless"])
+def test_dm_sessions_filters_and_updates_bindings_with_online_inventory(tmp_path, adapter):
+    bridge, endpoints = setup(tmp_path)
+    client_id = register(bridge, endpoints, "U2", "1" * 32, backend=adapter)
+    router = Routing(bridge)
+    client = router.to_bridge(client_id)
+    for index, prompt in enumerate(
+        ["Current thread", "Archived externally", "Wrong workspace", "Wrong session", "Missing"],
+        1,
+    ):
+        ts = f"1.{index:06}"
+        bridge.store.execute(
+            "INSERT INTO slack_routes VALUES (?,?,?,?,?)", ("T1", "C1", ts, "U2", client_id)
+        )
+        client.store.bind(
+            "C1", ts, {"id": f"w{index}", "active_session_id": f"s{index}"}, {"model": "Saved"}
+        )
+        status = client.store.add_status(f"T1:C1:{ts}", "C1", ts, prompt, {})
+        client.store.update(
+            status, workspace_id=f"w{index}", session_id=f"s{index}", state="active"
+        )
+
+    def summary(sid, wid, state):
+        configuration = (
+            {"model": "Live model"}
+            if adapter == "conductor"
+            else {"requested": {"model": "Requested"}, "effective": {"model": "Live model"}}
+        )
+        return {
+            "adapter": adapter,
+            "session_id": sid,
+            "workspace_id": wid,
+            "state": state,
+            "activity": "idle",
+            "configuration": configuration,
+        }
+
+    open_state = "ready" if adapter == "conductor" else "active"
+    endpoints[client_id].session_inventory = lambda: [
+        summary("s1", "w1", open_state),
+        summary("s2", "w2", "archived"),
+        summary("s3", "other-workspace", open_state),
+        summary("other-session", "w4", open_state),
+    ]
+    assert not router.receive(event("U2", "2.000001", "sessions", direct=True))
+
+    ((destination, thread, text, _),) = bridge.slack.posts
+    assert (destination, thread) == ("U2", None)
+    assert "Current thread" in text and "Live model" in text and "idle" in text.lower()
+    for absent in ("Archived externally", "Wrong workspace", "Wrong session", "Missing", "Saved"):
+        assert absent not in text
+    assert "running" not in text.lower() and "offline" not in text.lower()
+
+
+def test_dm_sessions_paginates_without_dropping_threads(tmp_path):
+    bridge, _ = setup(tmp_path)
+    router = Routing(bridge)
+    thread_urls = []
+    for index in range(36):
+        ts, session = f"1.{index:06}", f"s-{index}"
+        channel = f"C{index}"
+        url = f"https://workspace.slack.com/archives/{channel}/p{ts.replace('.', '')}"
+        thread_urls.append(url)
+        bridge.store.execute(
+            "INSERT INTO slack_routes VALUES (?,?,?,?,?)",
+            ("T1", channel, ts, "U1", router.legacy_id),
+        )
+        bridge.store.bind(channel, ts, {"id": "w", "active_session_id": session}, {"model": "Opus"})
+        status_id = bridge.store.add_status(
+            f"T1:{channel}:{ts}", channel, ts, "Start this project " * 40, {}
+        )
+        bridge.store.update(
+            status_id, workspace_id="w", session_id=session, state="waiting", latest="queued"
+        )
+
+    def slack_call(method, *, channel, message_ts):
+        assert method == "chat_getPermalink"
+        return {
+            "permalink": f"https://workspace.slack.com/archives/{channel}/p{message_ts.replace('.', '')}"
+        }
+
+    bridge.slack.call = slack_call
+    assert not router.receive(event("U1", "2.000001", "sessions", direct=True))
+    posts = bridge.slack.posts
+    assert len(posts) > 1
+    assert len({key for _, _, _, key in posts}) == len(posts)
+    for destination, thread, text, _ in posts:
+        assert (destination, thread) == ("U1", None)
+        assert len(text) <= 3500
+        assert "queued" in text.lower()
+    for url in thread_urls:
+        assert sum(url in text for _, _, text, _ in posts) == 1
 
 
 def test_unregistered_user_gets_private_guide_without_thread_claim(tmp_path):
