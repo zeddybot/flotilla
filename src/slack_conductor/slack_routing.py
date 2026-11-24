@@ -6,9 +6,11 @@ import threading
 from slack_sdk.errors import SlackClientError
 
 from .intake import audit
+from .markdown import markdown_chunks
 from .pairing import PAIR_CODE, PROFILE_NAME
 from .protocol import parse, profile_selector
 from .slack_app import Bridge, addressed, rejection
+from .slack_sessions import session_listing
 from .store import Store
 
 CONNECT_GUIDE = (
@@ -130,6 +132,12 @@ class Routing:
         )
         return profile.id if profile else None
 
+    def user_profiles(self, user):
+        profiles = [(p.id, p.name, p.backend) for p in self.pairing.profiles(self.team_id, user)]
+        if user == self.owner_id:
+            profiles.insert(0, (self.legacy_id, LEGACY_NAME, self.legacy.conductor.backend))
+        return profiles
+
     def dm_command(self, command, argument, user, key):
         if command == "connect":
             if not PAIR_CODE.fullmatch(argument):
@@ -145,17 +153,14 @@ class Routing:
             )
             self.to_bridge(profile.id)
             return f"Connected `{profile.name}` ({profile.backend}). Use `profiles` to see your clients."
+        if command == "sessions":
+            return session_listing(self, user)
         if command == "profiles":
             default = self.resolve(user, None)
-            profiles = [
-                (p.id, p.name, p.backend) for p in self.pairing.profiles(self.team_id, user)
-            ]
-            if user == self.owner_id:
-                profiles.insert(0, (self.legacy_id, LEGACY_NAME, self.legacy.conductor.backend))
             return (
                 "\n".join(
                     f"`{name}` ({backend})" + (" · default" if client_id == default else "")
-                    for client_id, name, backend in profiles
+                    for client_id, name, backend in self.user_profiles(user)
                 )
                 or CONNECT_GUIDE
             )
@@ -228,7 +233,7 @@ class Routing:
         argument = argument.strip()
         is_command = direct and (
             command == "connect"
-            or (command == "profiles" and not argument)
+            or (command in {"profiles", "sessions"} and not argument)
             or (command in {"default", "disconnect"} and PROFILE_NAME.fullmatch(argument))
         )
         if is_command or contains_pairing_command(text):
@@ -242,7 +247,11 @@ class Routing:
                 result = self.dm_command(command, argument, user, key)
             except ValueError as exc:
                 result = str(exc)
-            self.private(user, result, key)
+            if command == "sessions":
+                for index, page in enumerate(markdown_chunks(result, limit=3500)):
+                    self.private(user, page, f"{key}:{index}")
+            else:
+                self.private(user, result, key)
             audit(body, "profile_command", source)
             return False
 

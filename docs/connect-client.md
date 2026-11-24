@@ -60,6 +60,8 @@ Mention `@flotilla` in a channel where the app is a member. For example, `@floti
 
 The first registered person to summon Flotilla owns the session. Other registered people in the thread can send prompts that run with the owner’s agent credentials and repository access. Only the owner can respond to approvals or questions, interrupt work, close the session, or start a replacement. An offline client keeps its outstanding requests. Existing threads keep their original client when you change your default.
 
+DM `sessions` to find the Slack threads you started across profiles, most recently active first. Idle sessions stay listed until archived or replaced with `[new]`. If a client is unavailable, its entries show their last recorded status.
+
 DM `profiles` to list your clients, `default <profile>` to choose the default for new threads (for example, `default laptop` or `default mac` if that profile exists), or `disconnect daytona` to disconnect that credential. Use `[questions]` in the original thread to see outstanding requests on Conductor. Flotilla sends the details to the owner privately. Use `[haiku]`, `[sonnet]`, `[opus]`, `[fable]`, `[luna]`, `[terra]`, `[sol]`, or `[astra]` to select a model on a Mac or headless profile. Model availability depends on the signed-in account. On a headless profile you can also specify a native model ID, such as `[model:gpt-6.2-sol]`. Choose the model and effort when starting a session. To change them in an existing thread, start a fresh session with `[new]`.
 
 ```text

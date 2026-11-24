@@ -16,6 +16,8 @@ An existing installation can use the same Slack app and bot user ID. Update its 
 
 ## Use
 
+DM Flotilla `sessions` to see your open Slack sessions across profiles. Each entry shows the model, status, opening message, and a link back to the thread.
+
 Invite **Flotilla** to the channel and mention it in a message.
 
 ```text
