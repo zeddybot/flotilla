@@ -3,6 +3,7 @@
 import json
 import os
 import queue
+import stat
 import threading
 import time
 import uuid
@@ -12,7 +13,7 @@ from .process_host import Rejected, write_json_line
 
 
 class ClaudeStream:
-    def __init__(self, process, *, resume_session=None):
+    def __init__(self, process, *, resume_session=None, fresh_transcript=None):
         self.process = process
         self._stdin = process.stdin.fileno()
         os.set_blocking(self._stdin, False)
@@ -28,6 +29,7 @@ class ClaudeStream:
         self._write_failed = False
         self._session_id = None
         self._resume_session = resume_session
+        self._fresh_transcript = fresh_transcript
         self._reader = threading.Thread(target=self._read, daemon=True)
         self._reader.start()
 
@@ -37,9 +39,45 @@ class ClaudeStream:
         try:
             response.result(timeout=max(0, deadline - time.monotonic()))
         except TimeoutError:
+            with self._lock:
+                self._confirm_persisted_initial_input()
             error = RuntimeError("Claude did not acknowledge the initial input")
-            self._close_pending(error, fatal=True)
-            raise error from None
+            self._close_pending(error, fatal=True, unless_started=True)
+            response.result()
+
+    def _confirm_persisted_initial_input(self):
+        # Called with the lock held. A fresh CLI can persist the exact user row
+        # before it emits the replay on stdout.
+        path = self._fresh_transcript
+        if self._closed or self._started or not self._starting or path is None:
+            return
+        if self._session_id != path.stem:
+            return
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, "rb") as transcript:
+                if not stat.S_ISREG(os.fstat(transcript.fileno()).st_mode):
+                    return
+                prefix = transcript.read(2_000_000)
+        except OSError:
+            return
+        for line in prefix.split(b"\n")[:-1]:
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if (
+                isinstance(entry, dict)
+                and entry.get("type") == "user"
+                and entry.get("sessionId") == self._session_id
+                and entry.get("uuid") == self._starting
+                and entry.get("isSidechain") is False
+                and "parentUuid" in entry
+                and entry["parentUuid"] is None
+            ):
+                self._started = True
+                self._pending.pop(self._starting).set_result(None)
+                return
 
     def steer_async(self, thread_id, native_turn_id, prompt, message_id):
         return self._submit(prompt, message_id, time.monotonic() + 5, thread_id=thread_id)
@@ -80,9 +118,9 @@ class ClaudeStream:
                 raise RuntimeError("Claude input write could not be confirmed") from None
         return response
 
-    def _close_pending(self, error, *, fatal=False):
+    def _close_pending(self, error, *, fatal=False, unless_started=False):
         with self._lock:
-            if self._closed:
+            if self._closed or (unless_started and self._started):
                 return
             self._closed = True
             pending, self._pending = self._pending, {}
@@ -143,6 +181,8 @@ class ClaudeStream:
         session_id = source.get("session_id")
         if kind == "result":
             with self._lock:
+                if session_id == self._session_id:
+                    self._confirm_persisted_initial_input()
                 if not self._started:
                     if (
                         self._resume_session is not None
@@ -171,6 +211,7 @@ class ClaudeStream:
                     or not session_id
                     or self._resume_session not in (None, session_id)
                     or self._session_id not in (None, session_id)
+                    or (self._fresh_transcript and self._fresh_transcript.stem != session_id)
                 ):
                     raise RuntimeError("Claude reported an unexpected session identity")
                 self._session_id = session_id
@@ -184,7 +225,7 @@ class ClaudeStream:
             response = self._pending.pop(message_uuid)
             if message_uuid == self._starting:
                 self._started = True
-        response.set_result(None)
+            response.set_result(None)
 
     def lines(self):
         while (line := self.events.get()) is not None:
