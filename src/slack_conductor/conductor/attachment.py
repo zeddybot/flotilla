@@ -27,6 +27,20 @@ SILENCE_LIMIT = 120
 RETRY_DELAYS = (60, 120, 300)
 
 
+class InspectorUnavailable(RuntimeError):
+    def __init__(self, message, incarnation):
+        super().__init__(message)
+        self.incarnation = incarnation
+
+
+class InterfaceChanged(InspectorUnavailable):
+    pass
+
+
+def incompatible_interface(error):
+    return isinstance(error, str) and error.startswith("Error: Conductor interface changed: ")
+
+
 def frontend_version():
     source = Path(__file__).with_name("frontend.js").read_bytes()
     return hashlib.sha256(source).hexdigest()
@@ -69,7 +83,10 @@ def attach(transport):
     try:
         _attach(transport, ax)
     finally:
-        restore(Inspector, front, ax.pid)
+        try:
+            restore(Inspector, front, ax.pid)
+        except OSError:
+            log.warning("Restoring the previous foreground app failed", exc_info=True)
 
 
 def restore(inspector, front, conductor):
@@ -94,6 +111,9 @@ def _attach(transport, ax):
         if transport.online():
             return
         Inspector.activate(ax.pid)
+        ax.expose_renderer(
+            InspectorUnavailable("Conductor renderer accessibility unavailable", ax.incarnation)
+        )
         menu = next(
             (
                 e
@@ -103,7 +123,7 @@ def _attach(transport, ax):
             None,
         )
         if menu is None:
-            raise RuntimeError("Conductor Inspector unavailable")
+            raise InspectorUnavailable("Conductor Inspector unavailable", ax.incarnation)
         if transport.online():
             return
         opened = False
@@ -119,15 +139,12 @@ def _attach(transport, ax):
                     ax.press(tab)
                 prompt = ax.wait(
                     ax.console_prompt,
-                    "Inspector console unavailable",
+                    InspectorUnavailable("Inspector console unavailable", ax.incarnation),
                     5,
                 )
             draft = Inspector.draft(prompt).strip()
             if draft and not own_draft(draft):
-                raise RuntimeError(
-                    "Inspector console has a draft; clear it to allow attachment: "
-                    + repr(draft[:80])
-                )
+                raise RuntimeError("Inspector console has a draft; clear it to allow attachment")
             if transport.online():
                 return
             config = transport.attach(incarnation())
@@ -153,10 +170,12 @@ def _attach(transport, ax):
                 Quartz.CGEventPostToPid(ax.pid, event)
 
             def ready():
-                if transport.heartbeat.get("error"):
-                    raise RuntimeError(
-                        "Conductor native bootstrap: " + transport.heartbeat["error"]
-                    )
+                error = transport.heartbeat.get("error")
+                if error:
+                    message = f"Conductor native bootstrap: {error}"
+                    if incompatible_interface(error):
+                        raise InterfaceChanged(message, ax.incarnation)
+                    raise RuntimeError(message)
                 return transport.online()
 
             ax.wait(
@@ -169,7 +188,10 @@ def _attach(transport, ax):
             )
         finally:
             if opened:
-                ax.close_console()
+                try:
+                    ax.close_console()
+                except Exception:
+                    log.warning("Closing Flotilla's DevTools panel failed", exc_info=True)
 
 
 class Attachment:
@@ -192,6 +214,8 @@ class Attachment:
             "established": False,
             "attached": False,
             "waited": 0,
+            "inspector_failures": 0,
+            "inspector_blocked": False,
         }
         while not self.stop.is_set():
             try:
@@ -218,8 +242,10 @@ class Attachment:
         current = incarnation()
         online = self.transport.online()
         stalled = max(state["waited"], time.monotonic() - started) > STALL
-        if current != state["app"]:
-            state.update(failures=0, app=current, retry_at=0)
+        if current != state["app"] and (current or not state["inspector_failures"]):
+            state.update(
+                failures=0, app=current, retry_at=0, inspector_failures=0, inspector_blocked=False
+            )
             # The previous daemon's frontend earns the same grace as one that
             # served this daemon: it only needs time to find the address again.
             state["established"] = self.transport.expects(current)
@@ -231,9 +257,8 @@ class Attachment:
             state.update(
                 failures=0, offline_since=None, silent_since=None, established=True, attached=True
             )
-        elif Inspector.unattended():
-            # The console cannot be operated at the login window. Give the
-            # existing renderer its whole recovery window when the user returns.
+        elif state["inspector_blocked"] or Inspector.unattended():
+            # Keep watching for a heartbeat while the UI is off limits.
             state.update(offline_since=None, silent_since=None)
         else:
             now = time.monotonic()
@@ -256,11 +281,23 @@ class Attachment:
                     log.info("Conductor native frontend ready")
                     state.update(failures=0, attached=True, established=True)
                 except Exception as exc:
-                    state["failures"] += 1
-                    state["attempted_at"] = time.monotonic()
-                    delay = RETRY_DELAYS[min(state["failures"], len(RETRY_DELAYS)) - 1]
-                    state["retry_at"] = state["attempted_at"] + delay
-                    log.warning("Conductor attachment pending: %s", exc, exc_info=True)
+                    if isinstance(exc, InspectorUnavailable):
+                        if exc.incarnation and exc.incarnation != state["app"]:
+                            state.update(app=exc.incarnation, failures=0, inspector_failures=0)
+                        state["inspector_failures"] += 1
+                        if isinstance(exc, InterfaceChanged) or state["inspector_failures"] >= 2:
+                            state["inspector_blocked"] = True
+                            log.warning(
+                                "Automatic Conductor attachment paused until Conductor relaunches "
+                                "or the Flotilla client restarts: %s",
+                                exc,
+                            )
+                    if not state["inspector_blocked"]:
+                        state["failures"] += 1
+                        state["attempted_at"] = time.monotonic()
+                        delay = RETRY_DELAYS[min(state["failures"], len(RETRY_DELAYS)) - 1]
+                        state["retry_at"] = state["attempted_at"] + delay
+                        log.warning("Conductor attachment pending: %s", exc, exc_info=True)
         # Keep observing process changes during backoff so a new app launch
         # or crash does not inherit the old frontend's retry delay.
         before = time.monotonic()

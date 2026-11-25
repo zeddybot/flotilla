@@ -40,7 +40,11 @@ timeout on a slow machine. A bootstrap that cannot read the foreground app still
 runs and leaves Conductor in front. On this Mac, helper shutdown
 or reinstallation can itself foreground Conductor before bootstrap captures focus,
 so restoration is best effort. The accepted startup tradeoff is a brief foreground
-transition; ordinary message dispatch does not interact with the UI. After a failed attachment,
+transition; ordinary message dispatch does not interact with the UI. If the renderer reports
+an incompatible service interface, the client stops opening DevTools for that app process.
+Two unsuccessful Inspector lookups also pause automatic attachment. A Conductor relaunch or
+`flotilla client restart` allows another attempt. The client can still accept a returning
+frontend heartbeat while retries are paused. For transient connection failures,
 retries run after 1, 2 and then every 5 minutes on an available desktop. Selecting
 Conductor allows a retry after one minute. The bridge defers Inspector while the
 screen is locked or asleep and gives the existing frontend time to resume after unlock. Process

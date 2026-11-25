@@ -174,6 +174,26 @@ def test_console_controls_target_chromium_prompt_without_touching_composer(monke
     assert ax.console_tab() is None
 
 
+@pytest.mark.parametrize("already_exposed", [False, True])
+def test_renderer_accessibility_is_requested_only_when_needed(monkeypatch, already_exposed):
+    module = inspector_module(monkeypatch)
+    ax = module.Inspector()
+    ax.app = object()
+    renderer = {"AXRole": "AXWebArea"}
+    root = {"AXChildren": [renderer] if already_exposed else []}
+    monkeypatch.setattr(ax, "window", lambda: root)
+    monkeypatch.setattr(module, "attr", lambda node, key: node.get(key))
+    calls = []
+
+    def set_attribute(app, attribute, value):
+        calls.append((app, attribute, value))
+        root["AXChildren"].append(renderer)
+
+    monkeypatch.setattr(ax, "set", set_attribute)
+    ax.expose_renderer(RuntimeError("renderer unavailable"))
+    assert calls == ([] if already_exposed else [(ax.app, "AXManualAccessibility", True)])
+
+
 def test_close_console_only_closes_devtools(monkeypatch):
     module = inspector_module(monkeypatch)
     close = {"AXRole": "AXButton", "AXTitle": "Close"}
@@ -233,6 +253,7 @@ def attachment_attempts(
     probe=lambda: "1:app",
     focused=lambda t: 1,
     fails=False,
+    failure=None,
 ):
     import sys
     from types import SimpleNamespace
@@ -254,6 +275,8 @@ def attachment_attempts(
 
     def attach(*args):
         attempts.append(now[0])
+        if failure:
+            failure(now[0])
         if fails:
             raise RuntimeError("not ready")
 
@@ -393,13 +416,15 @@ def test_missing_console_prompt_closes_only_the_sidebar_we_opened(monkeypatch, a
     menu = {"AXTitle": "Open Debug Tools"}
     actions = []
 
-    def wait(predicate, message, timeout):
-        raise RuntimeError(message)
+    def wait(predicate, error, timeout):
+        raise error
 
     ax = SimpleNamespace(
         reachable=nullcontext,
         pid=1,
+        incarnation="1:app",
         app={"AXMenuBar": menu},
+        expose_renderer=lambda _: actions.append("renderer"),
         console_prompt=lambda: None,
         devtools=lambda: object() if already_open else None,
         press=lambda _: actions.append("open"),
@@ -407,9 +432,51 @@ def test_missing_console_prompt_closes_only_the_sidebar_we_opened(monkeypatch, a
         wait=wait,
         close_console=lambda: actions.append("close"),
     )
-    with pytest.raises(RuntimeError, match="Inspector console unavailable"):
+    with pytest.raises(attachment.InspectorUnavailable, match="Inspector console unavailable"):
         attachment._attach(SimpleNamespace(online=lambda: False), ax)
-    assert actions == ([] if already_open else ["open", "close"])
+    assert actions == (["renderer"] if already_open else ["renderer", "open", "close"])
+
+
+def test_missing_console_retries_once_after_launching_conductor(monkeypatch):
+    from slack_conductor.conductor import attachment
+
+    current = [None]
+
+    def fail(t):
+        current[0] = "1:app"
+        raise attachment.InspectorUnavailable("Inspector console unavailable", current[0])
+
+    attempts = attachment_attempts(
+        monkeypatch, lambda t: False, probe=lambda: current[0], failure=fail, until=400
+    )
+    assert attempts == [0, 60]
+
+
+def test_interface_failure_stops_ui_until_a_new_app_even_if_heartbeat_returns(monkeypatch):
+    from slack_conductor.conductor import attachment
+
+    current = ["1:app"]
+
+    def fail(t):
+        if t == 0:
+            raise attachment.InterfaceChanged("Conductor interface changed", current[0])
+
+    def tick(t):
+        if t == 200:
+            current[0] = None
+        if t == 210:
+            current[0] = "2:app"
+        return 1
+
+    attempts = attachment_attempts(
+        monkeypatch,
+        lambda t: 100 <= t < 110,
+        tick=tick,
+        probe=lambda: current[0],
+        failure=fail,
+        until=250,
+    )
+    assert attempts == [0, 211]
 
 
 def test_frontmost_probe_timeout_reads_as_unknown(monkeypatch):
