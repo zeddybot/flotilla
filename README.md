@@ -82,14 +82,16 @@ Fixed the dashboard:
 Download the [results](.context/results.csv).
 ~~~
 
-Relative paths resolve against the session’s workspace; absolute paths and local
-file URLs also work. Images using PNG, JPEG, or GIF render inline, and other files get
+Relative paths start at the session’s workspace root, even when an agent changes
+directories. For example, a report created under `outputs/` can be shared as
+`[report.csv](outputs/report.csv)`. Absolute paths and local file URLs also work.
+Images using PNG, JPEG, or GIF render inline, and other files get
 downloadable Slack links and attachments on the same reply. Web links, source locations
 such as app.py:42 or app.py#L42, and examples inside code blocks stay unchanged.
 Only link local files intended for everyone in the Slack conversation.
 
 The bridge waits for the final answer and all tracked background work, snapshots the
-selected files on the Mac, transfers them to the server, and shows **📤 Sending · N files** while uploading. Steering follows the
+selected files on the client running the session, transfers them to the server, and shows **📤 Sending · N files** while uploading. Steering follows the
 replacement reply; queued requests retain separate files. Upload IDs and progress survive
 restarts. Missing files or uploads that fail after bounded retries preserve the answer
 and show Needs attention with a reason beside each unavailable file. Limits are 10 distinct
