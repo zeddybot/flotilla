@@ -58,7 +58,13 @@ class Uploads:
                     if index >= MAX_FILES:
                         raise ValueError(f"maximum {MAX_FILES} files per reply")
                     # Nonblocking open prevents FIFOs/devices from stalling the daemon.
-                    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+                    try:
+                        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+                    except FileNotFoundError:
+                        raise ValueError(
+                            "file missing at the linked path. Check the full path from the "
+                            "workspace root or use the file's absolute path"
+                        ) from None
                     with os.fdopen(fd, "rb") as source:
                         info = os.fstat(source.fileno())
                         if not stat.S_ISREG(info.st_mode):

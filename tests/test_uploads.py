@@ -63,6 +63,8 @@ def test_snapshot_and_finalize_recovery_reuse_the_same_file_id(tmp_path, bridge_
 
 def test_missing_and_nonregular_files_preserve_answer_without_uploads(tmp_path, bridge_state):
     store, _, _, slack = bridge_state
+    (tmp_path / "outputs").mkdir()
+    (tmp_path / "outputs" / "gone.pdf").write_bytes(b"another file with the same name")
     sid = status(store, "request", "report")
     store.update(sid, result="Answer. [missing](gone.pdf) [folder](.) [source](app.py:42)")
     uploads = Uploads(store, slack, clock=lambda: 0)
@@ -70,6 +72,7 @@ def test_missing_and_nonregular_files_preserve_answer_without_uploads(tmp_path, 
     assert uploads.step(store.status(sid), plan)
     text, _, ids = uploads.result(plan)
     assert text.startswith("Answer.") and text.count("file unavailable") == 2
+    assert "full path from the workspace root" in text
     assert "[source](app.py:42)" in text and not ids
 
 
