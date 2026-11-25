@@ -1,3 +1,4 @@
+import logging
 import shutil
 import subprocess
 import time
@@ -8,6 +9,8 @@ import ApplicationServices as AX
 import Quartz
 
 from .process import incarnation
+
+log = logging.getLogger(__name__)
 
 
 def attr(element, name):
@@ -38,6 +41,7 @@ class Inspector:
     def __init__(self):
         self.pid = None
         self.app = None
+        self.incarnation = None
 
     @staticmethod
     def focused_pid():
@@ -121,6 +125,7 @@ class Inspector:
                 current = incarnation()
         if not current:
             raise RuntimeError("Conductor not reachable")
+        self.incarnation = current
         self.pid = int(current.split(":", 1)[0])
         self.app = AX.AXUIElementCreateApplication(self.pid)
 
@@ -172,11 +177,16 @@ class Inspector:
             yield
         finally:
             if switched and original_space:
-                current_space = subprocess.check_output(
-                    [aerospace, "list-workspaces", "--focused"], text=True, timeout=5
-                ).strip()
-                if current_space == target_space:
-                    subprocess.run([aerospace, "workspace", original_space], timeout=5, check=False)
+                try:
+                    current_space = subprocess.check_output(
+                        [aerospace, "list-workspaces", "--focused"], text=True, timeout=5
+                    ).strip()
+                    if current_space == target_space:
+                        subprocess.run(
+                            [aerospace, "workspace", original_space], timeout=5, check=False
+                        )
+                except (OSError, subprocess.SubprocessError):
+                    log.warning("Restoring the previous AeroSpace workspace failed", exc_info=True)
 
     def find(self, root=None, **selector):
         root = root if root is not None else self.window()
@@ -186,6 +196,19 @@ class Inspector:
 
     def console_prompt(self):
         return self.find(role="AXTextArea", title="Console prompt")
+
+    def expose_renderer(self, unavailable):
+        def web_area():
+            return self.find(role="AXWebArea")
+
+        if web_area() is None:
+            # Electron can expose only native window chrome until an AX client
+            # explicitly requests access to its renderer.
+            try:
+                self.set(self.app, "AXManualAccessibility", True)
+            except RuntimeError:
+                log.debug("Requesting Electron renderer accessibility failed", exc_info=True)
+            self.wait(web_area, unavailable, 5)
 
     def console_tab(self):
         return self.find(role="AXRadioButton", title="Console")
@@ -220,6 +243,8 @@ class Inspector:
             if value:
                 return value
             time.sleep(0.15)
+        if isinstance(message, Exception):
+            raise message
         raise RuntimeError(message() if callable(message) else message)
 
     def select_all(self):

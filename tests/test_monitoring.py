@@ -7,6 +7,24 @@ from slack_conductor.config import Config
 from slack_conductor.monitoring import Monitor, report
 
 
+def test_client_doctor_retains_last_incompatible_interface_diagnostic(tmp_path):
+    path = tmp_path / "native-heartbeat.json"
+    config = Config(mode="client", state_dir=tmp_path)
+    path.write_text(
+        json.dumps(
+            {
+                "at": time.time() - 120,
+                "ready": False,
+                "error": "Error: Conductor interface changed: getWorkspace, createWorkspaceWithSetup",
+            }
+        )
+    )
+    check = report(config)["checks"]["native_attachment"]
+    assert check["state"] == "warning" and "incompatible Conductor interface" in check["detail"]
+    path.write_text(json.dumps({"at": time.time(), "ready": True}))
+    assert report(config)["checks"]["native_attachment"]["state"] == "ok"
+
+
 def test_missing_server_databases_are_unknown_and_not_created(tmp_path):
     state = tmp_path / "state"
     state.mkdir()

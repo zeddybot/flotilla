@@ -12,6 +12,7 @@ from contextlib import closing
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
+from .conductor.attachment import incompatible_interface
 from .config import remote_credentials
 
 STALL_SECONDS = 600
@@ -105,7 +106,7 @@ def _lock_check(state_dir):
     return _check("warning", "service lock is not held")
 
 
-def _json_status(path, now, max_age, *, ready_key):
+def _json_status(path, now, max_age, *, ready_key, native=False):
     try:
         value = json.loads(path.read_text())
         age = now - value["at"]
@@ -113,6 +114,13 @@ def _json_status(path, now, max_age, *, ready_key):
             raise ValueError
     except (OSError, ValueError, KeyError, TypeError):
         return _check("unknown", "status unavailable")
+    if native and not value.get(ready_key) and incompatible_interface(value.get("error")):
+        return _check(
+            "warning",
+            "Last attachment found an incompatible Conductor interface. "
+            "Retry after updating Conductor or the Flotilla client.",
+            age_seconds=round(age),
+        )
     if age > max_age:
         return _check("warning", "status stale", age_seconds=round(age))
     if not value.get(ready_key):
@@ -289,7 +297,7 @@ def report(config, root=None, *, runtime_ready=None, slack_ready=None):
                 config.state_dir / "remote-status.json", now, 60, ready_key="connected"
             ),
             "native_attachment": _json_status(
-                config.state_dir / "native-heartbeat.json", now, 5, ready_key="ready"
+                config.state_dir / "native-heartbeat.json", now, 5, ready_key="ready", native=True
             ),
             "service": _lock_check(config.state_dir),
             "server_health": _server_health(config),
